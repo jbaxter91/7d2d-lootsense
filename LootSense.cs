@@ -70,6 +70,11 @@ public static class LootSense
     // Active markers to draw (position + mesh data)
     private static Dictionary<Vector3i, LootMarker> _activeMarkers = new(new Vector3iComparer());
     private static Dictionary<Vector3i, LootMarker> _scratchMarkers = new(new Vector3iComparer());
+    private static readonly List<Vector3i> _scanOffsets = new();
+    private static int _scanOffsetsRadius;
+    private static int _scanOffsetCursor;
+    private const int MaxOffsetsPerScan = 1600;
+    private const float MarkerTimeoutSeconds = 10f;
     private static readonly object _posLock = new();
 
     // For one-time verbose logging per position
@@ -80,6 +85,10 @@ public static class LootSense
     private static readonly Dictionary<string, PropertyInfo> _propertyInfoCache = new();
     private static readonly object _memberCacheLock = new();
     private const BindingFlags MemberBindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+    private static MethodInfo _miWorldIsChunkLoadedXZ;
+    private static MethodInfo _miWorldGetChunkFromWorldPos;
+    private static MethodInfo _miWorldGetChunkFromWorldPosXYZ;
+    private const int ChunkCoordShift = 4; // 16-block chunks
 
     // Progression reflection cache
     private static MethodInfo _miGetPerkLevel;
@@ -153,6 +162,23 @@ public static class LootSense
     {
         string options = string.Join(", ", Enum.GetNames(typeof(HighlightMode)).Select(n => n.ToLowerInvariant()));
         return $"mode={_highlightMode.ToString().ToLowerInvariant()} size={_sizePercent:F0}% opacity={_opacityPercent:F0}% color=#{GetColorHex()} range={FormatMeters(_rangeBonusMeters)} rank5={PreviewRadiusForRank(5):0.0}m options=[{options}]";
+    }
+
+    internal static string GetConfigDump()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("LootSense configuration snapshot:");
+        sb.AppendLine($"  mode={_highlightMode.ToString().ToLowerInvariant()}");
+        sb.AppendLine($"  sizePercent={_sizePercent:F1}");
+        sb.AppendLine($"  opacityPercent={_opacityPercent:F1}");
+        sb.AppendLine($"  colorHex=#{GetColorHex()}");
+        sb.AppendLine($"  rangeBonusMeters={_rangeBonusMeters:F2}");
+        for (int rank = 1; rank < RankMeters.Length; rank++)
+        {
+            sb.AppendLine($"  rank{rank}RadiusMeters={PreviewRadiusForRank(rank):F2}");
+        }
+
+        return sb.ToString();
     }
 
     internal static bool TrySetOpacity(string token, out string message)
@@ -532,25 +558,41 @@ public static class LootSense
         );
 
         int r = Mathf.CeilToInt(radius);
-        float r2 = radius * radius;
-
-        var nextMarkers = _scratchMarkers;
-        nextMarkers.Clear();
-
-        for (int dx = -r; dx <= r; dx++)
-        for (int dz = -r; dz <= r; dz++)
-        for (int dy = -r; dy <= r; dy++)
+        if (r <= 0)
         {
-            float dist2 = (dx * dx) + (dy * dy) + (dz * dz);
-            if (dist2 > r2) continue;
+            ClearAll();
+            return;
+        }
 
-            var pos = new Vector3i(center.x + dx, center.y + dy, center.z + dz);
+        EnsureScanOffsets(r);
+
+        int totalOffsets = _scanOffsets.Count;
+        if (totalOffsets == 0)
+        {
+            ClearAll();
+            return;
+        }
+
+        int batchSize = Mathf.Min(totalOffsets, MaxOffsetsPerScan);
+        float now = Time.time;
+
+        var updates = _scratchMarkers;
+        updates.Clear();
+
+        for (int i = 0; i < batchSize; i++)
+        {
+            var offset = _scanOffsets[_scanOffsetCursor];
+            _scanOffsetCursor++;
+            if (_scanOffsetCursor >= totalOffsets)
+                _scanOffsetCursor = 0;
+
+            var pos = new Vector3i(center.x + offset.x, center.y + offset.y, center.z + offset.z);
 
             if (!IsLootableAndUnopened(world, pos, out string verboseState, out BlockValue blockValue, out object visualSource))
                 continue;
 
-            var marker = BuildLootMarker(pos, blockValue, visualSource);
-            nextMarkers[pos] = marker;
+            var marker = BuildLootMarker(pos, blockValue, visualSource, now);
+            updates[pos] = marker;
 
             if (VerboseLogging && !_loggedPositions.Contains(pos))
             {
@@ -560,15 +602,78 @@ public static class LootSense
             }
         }
 
-        // prune verbose set for removed
-        var removed = _loggedPositions.Where(p => !nextMarkers.ContainsKey(p)).ToList();
-        foreach (var p in removed) _loggedPositions.Remove(p);
+        if (updates.Count > 0)
+        {
+            lock (_posLock)
+            {
+                foreach (var kvp in updates)
+                    _activeMarkers[kvp.Key] = kvp.Value;
+            }
+        }
+
+        updates.Clear();
+        PruneStaleMarkers(now);
+    }
+
+    private static void EnsureScanOffsets(int radius)
+    {
+        if (radius == _scanOffsetsRadius && _scanOffsets.Count > 0)
+            return;
+
+        if (radius <= 0)
+        {
+            _scanOffsets.Clear();
+            _scanOffsetsRadius = 0;
+            _scanOffsetCursor = 0;
+            return;
+        }
+
+        _scanOffsets.Clear();
+        _scanOffsetsRadius = radius;
+        _scanOffsetCursor = 0;
+
+        int r2 = radius * radius;
+
+        for (int dx = -radius; dx <= radius; dx++)
+        for (int dy = -radius; dy <= radius; dy++)
+        for (int dz = -radius; dz <= radius; dz++)
+        {
+            int dist2 = (dx * dx) + (dy * dy) + (dz * dz);
+            if (dist2 <= r2)
+                _scanOffsets.Add(new Vector3i(dx, dy, dz));
+        }
+
+        _scanOffsets.Sort((a, b) =>
+        {
+            int da = (a.x * a.x) + (a.y * a.y) + (a.z * a.z);
+            int db = (b.x * b.x) + (b.y * b.y) + (b.z * b.z);
+            return da.CompareTo(db);
+        });
+    }
+
+    private static void PruneStaleMarkers(float now)
+    {
+        List<Vector3i> toRemove = null;
 
         lock (_posLock)
         {
-            var previous = _activeMarkers;
-            _activeMarkers = nextMarkers;
-            _scratchMarkers = previous;
+            foreach (var kvp in _activeMarkers)
+            {
+                if (now - kvp.Value.LastSeenTime <= MarkerTimeoutSeconds)
+                    continue;
+
+                toRemove ??= new List<Vector3i>();
+                toRemove.Add(kvp.Key);
+            }
+
+            if (toRemove != null)
+            {
+                foreach (var pos in toRemove)
+                {
+                    _activeMarkers.Remove(pos);
+                    _loggedPositions.Remove(pos);
+                }
+            }
         }
     }
 
@@ -576,7 +681,7 @@ public static class LootSense
     // Mesh + marker helpers
     // =========================
 
-    private static LootMarker BuildLootMarker(Vector3i pos, BlockValue blockValue, object visualSource)
+    private static LootMarker BuildLootMarker(Vector3i pos, BlockValue blockValue, object visualSource, float timestamp)
     {
         Mesh mesh;
         Vector3 pivot;
@@ -597,7 +702,7 @@ public static class LootSense
         var rotation = ResolveRotation(blockValue);
         var localCenter = mesh != null ? mesh.bounds.center + pivot : new Vector3(0.5f, 0.5f, 0.5f);
 
-        return new LootMarker(pos, mesh, pivot, localCenter, rotation);
+        return new LootMarker(pos, mesh, pivot, localCenter, rotation, timestamp);
     }
 
     private static bool TryResolveMesh(BlockValue blockValue, object visualSource, out Mesh mesh, out Vector3 pivot)
@@ -1551,6 +1656,10 @@ public static class LootSense
             _activeMarkers.Clear();
 
         _loggedPositions.Clear();
+        _scratchMarkers.Clear();
+        _scanOffsets.Clear();
+        _scanOffsetsRadius = 0;
+        _scanOffsetCursor = 0;
     }
 
     // =========================
@@ -1564,7 +1673,13 @@ public static class LootSense
         tileEntity = null;
         try
         {
+            if (!IsBlockInLoadedChunk(world, pos))
+                return false;
+
             blockValue = world.GetBlock(pos);
+            if (blockValue.type == 0)
+                return false;
+
             object te = GetTileEntitySafe(world, pos);
             if (te != null)
             {
@@ -1644,6 +1759,47 @@ public static class LootSense
                || loweredTypeName.Contains("portcullis");
     }
 
+    private static bool IsBlockInLoadedChunk(World world, Vector3i pos)
+    {
+        if (world == null)
+            return false;
+
+        try
+        {
+            var worldType = world.GetType();
+
+            _miWorldIsChunkLoadedXZ ??= worldType.GetMethod("IsChunkLoaded", new[] { typeof(int), typeof(int) });
+            if (_miWorldIsChunkLoadedXZ != null)
+            {
+                int chunkX = pos.x >> ChunkCoordShift;
+                int chunkZ = pos.z >> ChunkCoordShift;
+                var result = _miWorldIsChunkLoadedXZ.Invoke(world, new object[] { chunkX, chunkZ });
+                if (result is bool loaded)
+                    return loaded;
+            }
+
+            _miWorldGetChunkFromWorldPos ??= worldType.GetMethod("GetChunkFromWorldPos", new[] { typeof(Vector3i) });
+            if (_miWorldGetChunkFromWorldPos != null)
+            {
+                var chunk = _miWorldGetChunkFromWorldPos.Invoke(world, new object[] { pos });
+                return chunk != null;
+            }
+
+            _miWorldGetChunkFromWorldPosXYZ ??= worldType.GetMethod("GetChunkFromWorldPos", new[] { typeof(int), typeof(int), typeof(int) });
+            if (_miWorldGetChunkFromWorldPosXYZ != null)
+            {
+                var chunk = _miWorldGetChunkFromWorldPosXYZ.Invoke(world, new object[] { pos.x, pos.y, pos.z });
+                return chunk != null;
+            }
+        }
+        catch
+        {
+            // ignore lookup errors and fall back to assuming the chunk is loaded
+        }
+
+        return true;
+    }
+
     private static bool? TryInferOpenedFromBlock(BlockValue blockValue)
     {
         try
@@ -1686,13 +1842,14 @@ public static class LootSense
 
     private readonly struct LootMarker
     {
-        public LootMarker(Vector3i position, Mesh mesh, Vector3 pivotOffset, Vector3 localCenter, Quaternion rotation)
+        public LootMarker(Vector3i position, Mesh mesh, Vector3 pivotOffset, Vector3 localCenter, Quaternion rotation, float lastSeenTime)
         {
             Position = position;
             Mesh = mesh;
             PivotOffset = pivotOffset;
             LocalCenter = localCenter;
             Rotation = rotation;
+            LastSeenTime = lastSeenTime;
         }
 
         public Vector3i Position { get; }
@@ -1700,6 +1857,7 @@ public static class LootSense
         public Vector3 PivotOffset { get; }
         public Vector3 LocalCenter { get; }
         public Quaternion Rotation { get; }
+        public float LastSeenTime { get; }
     }
 
     private sealed class Vector3iComparer : IEqualityComparer<Vector3i>

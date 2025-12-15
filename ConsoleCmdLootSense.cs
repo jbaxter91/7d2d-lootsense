@@ -15,6 +15,7 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
         sb.AppendLine("  pm_lootsense size <0-200>");
         sb.AppendLine("  pm_lootsense color <hex>");
         sb.AppendLine("  pm_lootsense range <deltaMeters>");
+        sb.AppendLine("  pm_lootsense dump");
         return sb.ToString();
     }
 
@@ -94,6 +95,10 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
 
             case "status":
                 OutputStatus();
+                break;
+
+            case "dump":
+                Output("[LootSense]\n" + LootSense.GetConfigDump());
                 break;
 
             default:
