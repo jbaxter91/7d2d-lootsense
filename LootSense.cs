@@ -75,10 +75,18 @@ public static class LootSense
     private static int _scanOffsetCursor;
     private const int MaxOffsetsPerScan = 1600;
     private const float MarkerTimeoutSeconds = 10f;
+    private const float RangeGraceMeters = 1.5f;
+    private const float MovementScanThresholdMeters = 0.35f;
+    private const int ActiveRechecksPerScan = 256;
     private static readonly object _posLock = new();
+    private static readonly object _scanGateLock = new();
+    private static Vector3 _lastScanPosition;
+    private static bool _hasLastScanPosition;
 
     // For one-time verbose logging per position
     private static readonly HashSet<Vector3i> _loggedPositions = new(new Vector3iComparer());
+    private static readonly Queue<Vector3i> _recheckQueue = new();
+    private static readonly HashSet<Vector3i> _recheckMembership = new(new Vector3iComparer());
 
     private static readonly Dictionary<Type, bool> _blockLootableCache = new();
     private static readonly Dictionary<string, FieldInfo> _fieldInfoCache = new();
@@ -485,7 +493,20 @@ public static class LootSense
                 return;
             }
 
-            ScanAndMark(__instance, radius);
+            var playerPos = __instance.GetPosition();
+            bool shouldScan = ShouldPerformFullScan(playerPos);
+            var world = __instance.world;
+
+            if (shouldScan)
+            {
+                RecordScanPosition(playerPos);
+                ScanAndMark(__instance, radius);
+            }
+            else if (world != null)
+            {
+                RevalidateActiveMarkers(world, playerPos, radius, Time.time);
+                PruneStaleMarkers(Time.time);
+            }
         }
         catch (Exception e)
         {
@@ -609,10 +630,92 @@ public static class LootSense
                 foreach (var kvp in updates)
                     _activeMarkers[kvp.Key] = kvp.Value;
             }
+
+            foreach (var key in updates.Keys)
+                EnqueueForRecheck(key);
         }
 
         updates.Clear();
+        RevalidateActiveMarkers(world, origin, radius, now);
         PruneStaleMarkers(now);
+    }
+
+    private static bool ShouldPerformFullScan(Vector3 playerPosition)
+    {
+        lock (_scanGateLock)
+        {
+            if (!_hasLastScanPosition)
+                return true;
+
+            float thresholdSqr = MovementScanThresholdMeters * MovementScanThresholdMeters;
+            float distanceSqr = (playerPosition - _lastScanPosition).sqrMagnitude;
+            return distanceSqr >= thresholdSqr;
+        }
+    }
+
+    private static void RecordScanPosition(Vector3 playerPosition)
+    {
+        lock (_scanGateLock)
+        {
+            _lastScanPosition = playerPosition;
+            _hasLastScanPosition = true;
+        }
+    }
+
+    private static void EnqueueForRecheck(Vector3i pos)
+    {
+        if (_recheckMembership.Add(pos))
+            _recheckQueue.Enqueue(pos);
+    }
+
+    private static void RevalidateActiveMarkers(World world, Vector3 playerPosition, float activeRadius, float now)
+    {
+        if (world == null || ActiveRechecksPerScan <= 0)
+            return;
+
+        int checks = Mathf.Min(ActiveRechecksPerScan, _recheckQueue.Count);
+        int processed = 0;
+        float radiusLimit = Mathf.Max(0f, activeRadius) + RangeGraceMeters;
+        float radiusLimitSqr = radiusLimit * radiusLimit;
+
+        while (_recheckQueue.Count > 0 && processed < checks)
+        {
+            var pos = _recheckQueue.Dequeue();
+            _recheckMembership.Remove(pos);
+            processed++;
+
+            var markerCenter = new Vector3(pos.x + 0.5f, pos.y + 0.5f, pos.z + 0.5f);
+            float distanceSqr = (markerCenter - playerPosition).sqrMagnitude;
+            if (distanceSqr > radiusLimitSqr)
+            {
+                lock (_posLock)
+                    _activeMarkers.Remove(pos);
+                _loggedPositions.Remove(pos);
+                continue;
+            }
+
+            LootMarker existing;
+            bool exists;
+            lock (_posLock)
+                exists = _activeMarkers.TryGetValue(pos, out existing);
+
+            if (!exists)
+                continue;
+
+            if (!IsLootableAndUnopened(world, pos, out _, out BlockValue blockValue, out object visualSource))
+            {
+                lock (_posLock)
+                    _activeMarkers.Remove(pos);
+                _loggedPositions.Remove(pos);
+                continue;
+            }
+
+            var refreshed = BuildLootMarker(pos, blockValue, visualSource, now);
+            lock (_posLock)
+                _activeMarkers[pos] = refreshed;
+
+            EnqueueForRecheck(pos);
+        }
     }
 
     private static void EnsureScanOffsets(int radius)
@@ -672,6 +775,7 @@ public static class LootSense
                 {
                     _activeMarkers.Remove(pos);
                     _loggedPositions.Remove(pos);
+                    _recheckMembership.Remove(pos);
                 }
             }
         }
@@ -1660,6 +1764,13 @@ public static class LootSense
         _scanOffsets.Clear();
         _scanOffsetsRadius = 0;
         _scanOffsetCursor = 0;
+        _recheckQueue.Clear();
+        _recheckMembership.Clear();
+        lock (_scanGateLock)
+        {
+            _hasLastScanPosition = false;
+            _lastScanPosition = Vector3.zero;
+        }
     }
 
     // =========================
