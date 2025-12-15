@@ -41,6 +41,7 @@ internal sealed class LootOverlayManager
     private Vector3 _worldOriginOffset = Vector3.zero;
     private float _nextOverlayTraceTime;
     private float _nextDebugPingTime;
+    private bool _renderingEnabled = true;
 
     public LootOverlayManager(LootSensePreferences preferences, MarkerRepository markerRepository, bool debugMode, bool positionTraceLogging, float overlayTraceIntervalSeconds)
     {
@@ -53,8 +54,15 @@ internal sealed class LootOverlayManager
 
     public void EnsureOverlay()
     {
-        if (_overlayBehaviour != null)
+        if (!_renderingEnabled)
             return;
+
+        if (_overlayBehaviour != null)
+        {
+            if (!_overlayBehaviour.enabled)
+                _overlayBehaviour.enabled = true;
+            return;
+        }
 
         var go = new GameObject("PerceptionMasteryLootSenseOverlay");
         UnityEngine.Object.DontDestroyOnLoad(go);
@@ -63,6 +71,20 @@ internal sealed class LootOverlayManager
 
         if (_debugMode)
             Debug.Log("[PerceptionMasteryLootSense] Overlay renderer created.");
+    }
+
+    public void SetRenderingEnabled(bool enabled)
+    {
+        _renderingEnabled = enabled;
+
+        if (!_renderingEnabled)
+        {
+            if (_overlayBehaviour != null)
+                _overlayBehaviour.enabled = false;
+            return;
+        }
+
+        EnsureOverlay();
     }
 
     public void NotifyPreferencesChanged()
@@ -110,6 +132,9 @@ internal sealed class LootOverlayManager
     {
         try
         {
+            if (!_renderingEnabled)
+                return;
+
             if (ShouldSkipCamera(cam))
                 return;
 

@@ -26,6 +26,15 @@ public static class LootSense
     internal static bool TryAdjustRange(string token, out string message)
         => Controller.TryAdjustRange(token, out message);
 
+    internal static bool TrySetSystemState(string token, out string message)
+        => Controller.TrySetSystemState(token, out message);
+
+    internal static bool TrySetScanningState(string token, out string message)
+        => Controller.TrySetScanningState(token, out message);
+
+    internal static bool TrySetRenderingState(string token, out string message)
+        => Controller.TrySetRenderingState(token, out message);
+
     internal static string GetHighlightModeSummary()
         => Controller.GetHighlightModeSummary();
 

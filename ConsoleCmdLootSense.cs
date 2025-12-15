@@ -15,6 +15,9 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
         sb.AppendLine("  pm_lootsense size <0-200>");
         sb.AppendLine("  pm_lootsense color <hex>");
         sb.AppendLine("  pm_lootsense range <deltaMeters>");
+        sb.AppendLine("  pm_lootsense system <on|off>");
+        sb.AppendLine("  pm_lootsense scanning <on|off>");
+        sb.AppendLine("  pm_lootsense rendering <on|off>");
         sb.AppendLine("  pm_lootsense dump");
         return sb.ToString();
     }
@@ -93,6 +96,22 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
                 Output("[LootSense] " + rangeMessage);
                 break;
 
+            case "system":
+            case "systems":
+                HandleToggle(_params, LootSense.TrySetSystemState, "system");
+                break;
+
+            case "scan":
+            case "scanning":
+                HandleToggle(_params, LootSense.TrySetScanningState, "scanning");
+                break;
+
+            case "render":
+            case "rendering":
+            case "overlay":
+                HandleToggle(_params, LootSense.TrySetRenderingState, "rendering");
+                break;
+
             case "status":
                 OutputStatus();
                 break;
@@ -117,5 +136,19 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
         var console = SdtdConsole.Instance;
         if (console != null)
             console.Output(text);
+    }
+
+    private delegate bool ToggleSetter(string token, out string message);
+
+    private static void HandleToggle(List<string> args, ToggleSetter setter, string label)
+    {
+        if (args.Count < 2)
+        {
+            Output($"Missing {label} state. Use on/off.");
+            return;
+        }
+
+        setter(args[1], out var toggleMessage);
+        Output("[LootSense] " + toggleMessage);
     }
 }

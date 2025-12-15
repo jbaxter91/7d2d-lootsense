@@ -29,6 +29,10 @@ internal sealed class LootSenseController
     private int _lastKnownRank;
     private float _lastComputedRadius;
 
+    private bool _systemEnabled = true;
+    private bool _scanningEnabled = true;
+    private bool _renderingEnabled = true;
+
     public LootSenseController()
     {
         _preferences = new LootSensePreferences();
@@ -49,7 +53,17 @@ internal sealed class LootSenseController
             return;
         }
 
-        _overlay.EnsureOverlay();
+        if (!_systemEnabled)
+        {
+            _markerRepository.Clear();
+            return;
+        }
+
+        if (_renderingEnabled)
+            _overlay.EnsureOverlay();
+
+        if (!_scanningEnabled)
+            return;
 
         float now = Time.time;
         if (now < _nextScanTime)
@@ -129,14 +143,95 @@ internal sealed class LootSenseController
         return success;
     }
 
+    public bool TrySetSystemState(string token, out string message)
+    {
+        if (!TryParseToggle(token, out bool enabled, out message))
+            return false;
+
+        if (_systemEnabled == enabled)
+        {
+            message = $"System already {(enabled ? "enabled" : "disabled")}.";
+            return true;
+        }
+
+        _systemEnabled = enabled;
+        if (!enabled)
+        {
+            _markerRepository.Clear();
+            ResetMovementGate();
+            _nextScanTime = Time.time;
+        }
+        else
+        {
+            ResetMovementGate();
+            _nextScanTime = Time.time;
+        }
+
+        SyncOverlayState();
+        message = enabled ? "LootSense system enabled." : "LootSense system disabled.";
+        return true;
+    }
+
+    public bool TrySetScanningState(string token, out string message)
+    {
+        if (!TryParseToggle(token, out bool enabled, out message))
+            return false;
+
+        if (_scanningEnabled == enabled)
+        {
+            message = $"Scanning already {(enabled ? "enabled" : "disabled")}.";
+            return true;
+        }
+
+        _scanningEnabled = enabled;
+        ResetMovementGate();
+        if (enabled)
+            _nextScanTime = Time.time;
+
+        message = enabled ? "Scanning enabled." : "Scanning disabled.";
+        return true;
+    }
+
+    public bool TrySetRenderingState(string token, out string message)
+    {
+        if (!TryParseToggle(token, out bool enabled, out message))
+            return false;
+
+        if (_renderingEnabled == enabled)
+        {
+            message = $"Rendering already {(enabled ? "enabled" : "disabled")}.";
+            return true;
+        }
+
+        _renderingEnabled = enabled;
+        if (enabled)
+        {
+            ResetMovementGate();
+            _nextScanTime = Time.time;
+        }
+
+        SyncOverlayState();
+        message = enabled ? "Rendering enabled." : "Rendering disabled.";
+        return true;
+    }
+
     public string GetHighlightModeSummary()
     {
-        return _preferences.BuildStatusSummary(_lastComputedRadius);
+        var summary = _preferences.BuildStatusSummary(_lastComputedRadius);
+        return string.Concat(summary,
+            " system=", FormatToggle(_systemEnabled),
+            " scanning=", FormatToggle(_scanningEnabled),
+            " rendering=", FormatToggle(_renderingEnabled));
     }
 
     public string GetConfigDump()
     {
-        return _preferences.BuildConfigDump(PreviewRadiusForRank, _lastComputedRadius);
+        var baseDump = _preferences.BuildConfigDump(PreviewRadiusForRank, _lastComputedRadius).TrimEnd();
+        return string.Concat(baseDump,
+            "\n  systemEnabled=", _systemEnabled ? "true" : "false",
+            "\n  scanningEnabled=", _scanningEnabled ? "true" : "false",
+            "\n  renderingEnabled=", _renderingEnabled ? "true" : "false",
+            "\n");
     }
 
     private float PreviewRadiusForRank(int rank)
@@ -181,4 +276,45 @@ internal sealed class LootSenseController
             _lastScanPosition = Vector3.zero;
         }
     }
+
+    private void SyncOverlayState()
+    {
+        bool shouldRender = _systemEnabled && _renderingEnabled;
+        _overlay.SetRenderingEnabled(shouldRender);
+    }
+
+    private static bool TryParseToggle(string token, out bool enabled, out string message)
+    {
+        enabled = true;
+        message = null;
+
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            message = "Missing state. Use on/off.";
+            return false;
+        }
+
+        switch (token.Trim().ToLowerInvariant())
+        {
+            case "on":
+            case "true":
+            case "1":
+            case "enable":
+            case "enabled":
+                enabled = true;
+                return true;
+            case "off":
+            case "false":
+            case "0":
+            case "disable":
+            case "disabled":
+                enabled = false;
+                return true;
+            default:
+                message = "Invalid state. Use on/off.";
+                return false;
+        }
+    }
+
+    private static string FormatToggle(bool value) => value ? "on" : "off";
 }
