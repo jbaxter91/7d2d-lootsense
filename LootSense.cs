@@ -55,9 +55,9 @@ public static class LootSense
         LoadVisualPreferences();
     }
 
-    private const bool DebugMode = true;
-    private static readonly bool VerboseLogging = true;
-    private const bool PositionTraceLogging = true;
+    private static readonly bool DebugMode = false;
+    private static readonly bool VerboseLogging = false;
+    private static readonly bool PositionTraceLogging = false;
     private const float OverlayTraceIntervalSeconds = 2f;
 
     private static float _nextDebugTime;
@@ -68,11 +68,18 @@ public static class LootSense
     private static Vector3 _worldOriginOffset = Vector3.zero;
 
     // Active markers to draw (position + mesh data)
-    private static readonly Dictionary<Vector3i, LootMarker> _activeMarkers = new(new Vector3iComparer());
+    private static Dictionary<Vector3i, LootMarker> _activeMarkers = new(new Vector3iComparer());
+    private static Dictionary<Vector3i, LootMarker> _scratchMarkers = new(new Vector3iComparer());
     private static readonly object _posLock = new();
 
     // For one-time verbose logging per position
     private static readonly HashSet<Vector3i> _loggedPositions = new(new Vector3iComparer());
+
+    private static readonly Dictionary<Type, bool> _blockLootableCache = new();
+    private static readonly Dictionary<string, FieldInfo> _fieldInfoCache = new();
+    private static readonly Dictionary<string, PropertyInfo> _propertyInfoCache = new();
+    private static readonly object _memberCacheLock = new();
+    private const BindingFlags MemberBindingFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
 
     // Progression reflection cache
     private static MethodInfo _miGetPerkLevel;
@@ -527,7 +534,8 @@ public static class LootSense
         int r = Mathf.CeilToInt(radius);
         float r2 = radius * radius;
 
-        var stillValid = new Dictionary<Vector3i, LootMarker>(new Vector3iComparer());
+        var nextMarkers = _scratchMarkers;
+        nextMarkers.Clear();
 
         for (int dx = -r; dx <= r; dx++)
         for (int dz = -r; dz <= r; dz++)
@@ -542,7 +550,7 @@ public static class LootSense
                 continue;
 
             var marker = BuildLootMarker(pos, blockValue, visualSource);
-            stillValid[pos] = marker;
+            nextMarkers[pos] = marker;
 
             if (VerboseLogging && !_loggedPositions.Contains(pos))
             {
@@ -552,16 +560,16 @@ public static class LootSense
             }
         }
 
+        // prune verbose set for removed
+        var removed = _loggedPositions.Where(p => !nextMarkers.ContainsKey(p)).ToList();
+        foreach (var p in removed) _loggedPositions.Remove(p);
+
         lock (_posLock)
         {
-            _activeMarkers.Clear();
-            foreach (var kvp in stillValid)
-                _activeMarkers[kvp.Key] = kvp.Value;
+            var previous = _activeMarkers;
+            _activeMarkers = nextMarkers;
+            _scratchMarkers = previous;
         }
-
-        // prune verbose set for removed
-        var removed = _loggedPositions.Where(p => !stillValid.ContainsKey(p)).ToList();
-        foreach (var p in removed) _loggedPositions.Remove(p);
     }
 
     // =========================
@@ -1713,9 +1721,23 @@ public static class LootSense
 
     private static bool BlockLooksLootable(Block block)
     {
+        if (block == null)
+            return false;
+
+        var type = block.GetType();
+        if (_blockLootableCache.TryGetValue(type, out bool cached))
+            return cached;
+
+        bool result = EvaluateBlockLootable(block);
+        _blockLootableCache[type] = result;
+        return result;
+    }
+
+    private static bool EvaluateBlockLootable(Block block)
+    {
         try
         {
-            string bn = (block.GetBlockName() ?? "").ToLowerInvariant();
+            string bn = (block.GetBlockName() ?? string.Empty).ToLowerInvariant();
             string cn = block.GetType().Name.ToLowerInvariant();
 
             if (bn.Contains("cnt") || bn.Contains("crate") || bn.Contains("chest") || bn.Contains("safe") || bn.Contains("cabinet") || bn.Contains("loot"))
@@ -1723,20 +1745,21 @@ public static class LootSense
             if (cn.Contains("loot") || cn.Contains("container"))
                 return true;
 
-            var propsProp = block.GetType().GetProperty("Properties", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var propsProp = block.GetType().GetProperty("Properties", MemberBindingFlags);
             var props = propsProp?.GetValue(block);
             if (props == null) return false;
 
             foreach (var key in new[] { "LootList", "LootListOnDestroy", "LootListOnRespawn", "LootContainer" })
             {
-                var miHasKey = props.GetType().GetMethod("ContainsKey", new[] { typeof(string) });
+                var propsType = props.GetType();
+                var miHasKey = propsType.GetMethod("ContainsKey", new[] { typeof(string) });
                 if (miHasKey != null)
                 {
                     var res = miHasKey.Invoke(props, new object[] { key });
                     if (res is bool b && b) return true;
                 }
 
-                var miContains = props.GetType().GetMethod("Contains", new[] { typeof(string) });
+                var miContains = propsType.GetMethod("Contains", new[] { typeof(string) });
                 if (miContains != null)
                 {
                     var res = miContains.Invoke(props, new object[] { key });
@@ -1744,7 +1767,10 @@ public static class LootSense
                 }
             }
         }
-        catch { }
+        catch
+        {
+            // ignore lookup failures and fall back to "not lootable"
+        }
 
         return false;
     }
@@ -1832,14 +1858,14 @@ public static class LootSense
     {
         foreach (var n in names)
         {
-            var f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var f = GetCachedField(t, n);
             if (f != null && f.FieldType == typeof(bool))
             {
                 value = (bool)f.GetValue(obj);
                 return true;
             }
 
-            var p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var p = GetCachedProperty(t, n);
             if (p != null && p.PropertyType == typeof(bool) && p.GetIndexParameters().Length == 0)
             {
                 value = (bool)p.GetValue(obj, null);
@@ -1854,14 +1880,14 @@ public static class LootSense
     {
         foreach (var n in names)
         {
-            var f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var f = GetCachedField(t, n);
             if (f != null && f.FieldType == typeof(long))
             {
                 value = (long)f.GetValue(obj);
                 return true;
             }
 
-            var p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var p = GetCachedProperty(t, n);
             if (p != null && p.PropertyType == typeof(long) && p.GetIndexParameters().Length == 0)
             {
                 value = (long)p.GetValue(obj, null);
@@ -1876,14 +1902,14 @@ public static class LootSense
     {
         foreach (var n in names)
         {
-            var f = t.GetField(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var f = GetCachedField(t, n);
             if (f != null && f.FieldType == typeof(int))
             {
                 value = (int)f.GetValue(obj);
                 return true;
             }
 
-            var p = t.GetProperty(n, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var p = GetCachedProperty(t, n);
             if (p != null && p.PropertyType == typeof(int) && p.GetIndexParameters().Length == 0)
             {
                 value = (int)p.GetValue(obj, null);
@@ -1892,6 +1918,40 @@ public static class LootSense
         }
         value = 0;
         return false;
+    }
+
+    private static FieldInfo GetCachedField(Type type, string name)
+    {
+        if (type == null || string.IsNullOrEmpty(name))
+            return null;
+
+        string key = string.Concat(type.FullName, "::", name);
+        lock (_memberCacheLock)
+        {
+            if (_fieldInfoCache.TryGetValue(key, out var cached))
+                return cached;
+
+            var field = type.GetField(name, MemberBindingFlags);
+            _fieldInfoCache[key] = field;
+            return field;
+        }
+    }
+
+    private static PropertyInfo GetCachedProperty(Type type, string name)
+    {
+        if (type == null || string.IsNullOrEmpty(name))
+            return null;
+
+        string key = string.Concat(type.FullName, "::", name);
+        lock (_memberCacheLock)
+        {
+            if (_propertyInfoCache.TryGetValue(key, out var cached))
+                return cached;
+
+            var prop = type.GetProperty(name, MemberBindingFlags);
+            _propertyInfoCache[key] = prop;
+            return prop;
+        }
     }
 
     private static object GetTileEntitySafe(World world, Vector3i pos)
