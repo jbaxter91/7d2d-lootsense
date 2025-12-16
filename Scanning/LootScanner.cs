@@ -9,6 +9,7 @@ using UnityEngine;
 internal sealed class LootScanner
 {
     private const int MaxOffsetsPerScan = 1600;
+    private const int MinBatchesPerFullScan = 3; // keep at least this many passes per full radius to smooth workload
     private const int EnumerableProbeLimit = 4;
 
     private static readonly string[] MeshMethodCandidates = { "GetPreviewMesh", "GetRenderMesh", "GetModelMesh", "GetMesh" };
@@ -17,7 +18,7 @@ internal sealed class LootScanner
     private readonly HashSet<Vector3i> _loggedPositions = new(new Vector3iComparer());
     private readonly List<Vector3i> _scanOffsets = new();
 
-    private readonly Dictionary<Type, bool> _blockLootableCache = new();
+    private readonly Dictionary<int, bool> _blockTypeLootableCache = new();
     private readonly Dictionary<string, FieldInfo> _fieldInfoCache = new();
     private readonly Dictionary<string, PropertyInfo> _propertyInfoCache = new();
     private readonly object _memberCacheLock = new();
@@ -30,11 +31,20 @@ internal sealed class LootScanner
     private Mesh _fallbackCubeMesh;
     private Vector3 _fallbackCubePivot;
     private MethodInfo _miBlockRotation;
-    private MethodInfo _miWorldIsChunkLoadedXZ;
-    private MethodInfo _miWorldGetChunkFromWorldPos;
-    private MethodInfo _miWorldGetChunkFromWorldPosXYZ;
     private MethodInfo _miGetPerkLevel;
     private MethodInfo _miGetProgressionValue;
+
+    private delegate bool IsChunkLoadedXZDelegate(World world, int chunkX, int chunkZ);
+    private delegate object GetChunkFromWorldPosVecDelegate(World world, Vector3i pos);
+    private delegate object GetChunkFromWorldPosXYZDelegate(World world, int x, int y, int z);
+    private delegate object GetTileEntityIntVecDelegate(World world, int type, Vector3i pos);
+    private delegate object GetTileEntityVecDelegate(World world, Vector3i pos);
+
+    private IsChunkLoadedXZDelegate _isChunkLoadedXZ;
+    private GetChunkFromWorldPosVecDelegate _getChunkFromWorldPosVec;
+    private GetChunkFromWorldPosXYZDelegate _getChunkFromWorldPosXYZ;
+    private GetTileEntityIntVecDelegate _getTileEntityIntVec;
+    private GetTileEntityVecDelegate _getTileEntityVec;
 
     private readonly Dictionary<int, Mesh> _meshCache = new();
     private readonly Dictionary<int, Vector3> _meshPivotCache = new();
@@ -78,6 +88,16 @@ internal sealed class LootScanner
                 return;
 
             int batchSize = Mathf.Min(totalOffsets, MaxOffsetsPerScan);
+            if (totalOffsets > batchSize && MinBatchesPerFullScan > 1)
+            {
+                int currentBatches = Mathf.CeilToInt((float)totalOffsets / batchSize);
+                if (currentBatches < MinBatchesPerFullScan)
+                {
+                    int targetBatches = MinBatchesPerFullScan;
+                    batchSize = Mathf.CeilToInt((float)totalOffsets / targetBatches);
+                    batchSize = Mathf.Max(1, Mathf.Min(batchSize, MaxOffsetsPerScan));
+                }
+            }
             _scratchMarkers.Clear();
 
             for (int i = 0; i < batchSize; i++)
@@ -251,7 +271,7 @@ internal sealed class LootScanner
             var block = blockValue.Block;
             if (block == null) return false;
 
-            bool looks = BlockLooksLootable(block);
+            bool looks = BlockLooksLootable(block, blockValue.type);
 
             if (looks)
             {
@@ -309,30 +329,21 @@ internal sealed class LootScanner
         try
         {
             var worldType = world.GetType();
-
-            _miWorldIsChunkLoadedXZ ??= worldType.GetMethod("IsChunkLoaded", new[] { typeof(int), typeof(int) });
-            if (_miWorldIsChunkLoadedXZ != null)
+            _isChunkLoadedXZ ??= CreateWorldDelegate<IsChunkLoadedXZDelegate>(worldType, "IsChunkLoaded", typeof(int), typeof(int));
+            if (_isChunkLoadedXZ != null)
             {
                 int chunkX = pos.x >> ChunkCoordShift;
                 int chunkZ = pos.z >> ChunkCoordShift;
-                var result = _miWorldIsChunkLoadedXZ.Invoke(world, new object[] { chunkX, chunkZ });
-                if (result is bool loaded)
-                    return loaded;
+                return _isChunkLoadedXZ(world, chunkX, chunkZ);
             }
 
-            _miWorldGetChunkFromWorldPos ??= worldType.GetMethod("GetChunkFromWorldPos", new[] { typeof(Vector3i) });
-            if (_miWorldGetChunkFromWorldPos != null)
-            {
-                var chunk = _miWorldGetChunkFromWorldPos.Invoke(world, new object[] { pos });
-                return chunk != null;
-            }
+            _getChunkFromWorldPosVec ??= CreateWorldDelegate<GetChunkFromWorldPosVecDelegate>(worldType, "GetChunkFromWorldPos", typeof(Vector3i));
+            if (_getChunkFromWorldPosVec != null)
+                return _getChunkFromWorldPosVec(world, pos) != null;
 
-            _miWorldGetChunkFromWorldPosXYZ ??= worldType.GetMethod("GetChunkFromWorldPos", new[] { typeof(int), typeof(int), typeof(int) });
-            if (_miWorldGetChunkFromWorldPosXYZ != null)
-            {
-                var chunk = _miWorldGetChunkFromWorldPosXYZ.Invoke(world, new object[] { pos.x, pos.y, pos.z });
-                return chunk != null;
-            }
+            _getChunkFromWorldPosXYZ ??= CreateWorldDelegate<GetChunkFromWorldPosXYZDelegate>(worldType, "GetChunkFromWorldPos", typeof(int), typeof(int), typeof(int));
+            if (_getChunkFromWorldPosXYZ != null)
+                return _getChunkFromWorldPosXYZ(world, pos.x, pos.y, pos.z) != null;
         }
         catch
         {
@@ -382,17 +393,16 @@ internal sealed class LootScanner
         return null;
     }
 
-    private bool BlockLooksLootable(Block block)
+    private bool BlockLooksLootable(Block block, int blockType)
     {
-        if (block == null)
+        if (block == null || blockType == 0)
             return false;
 
-        var type = block.GetType();
-        if (_blockLootableCache.TryGetValue(type, out bool cached))
+        if (_blockTypeLootableCache.TryGetValue(blockType, out bool cached))
             return cached;
 
         bool result = EvaluateBlockLootable(block);
-        _blockLootableCache[type] = result;
+        _blockTypeLootableCache[blockType] = result;
         return result;
     }
 
@@ -627,11 +637,13 @@ internal sealed class LootScanner
         {
             var t = world.GetType();
 
-            var mi = t.GetMethod("GetTileEntity", new[] { typeof(int), typeof(Vector3i) });
-            if (mi != null) return mi.Invoke(world, new object[] { 0, pos });
+            _getTileEntityIntVec ??= CreateWorldDelegate<GetTileEntityIntVecDelegate>(t, "GetTileEntity", typeof(int), typeof(Vector3i));
+            if (_getTileEntityIntVec != null)
+                return _getTileEntityIntVec(world, 0, pos);
 
-            mi = t.GetMethod("GetTileEntity", new[] { typeof(Vector3i) });
-            if (mi != null) return mi.Invoke(world, new object[] { pos });
+            _getTileEntityVec ??= CreateWorldDelegate<GetTileEntityVecDelegate>(t, "GetTileEntity", typeof(Vector3i));
+            if (_getTileEntityVec != null)
+                return _getTileEntityVec(world, pos);
         }
         catch
         {
@@ -934,6 +946,26 @@ internal sealed class LootScanner
         {
             mesh = null;
             return false;
+        }
+    }
+
+    private static TDelegate CreateWorldDelegate<TDelegate>(Type worldType, string methodName, params Type[] parameterTypes)
+        where TDelegate : Delegate
+    {
+        if (worldType == null)
+            return null;
+
+        try
+        {
+            var method = worldType.GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, parameterTypes, null);
+            if (method == null)
+                return null;
+
+            return (TDelegate)method.CreateDelegate(typeof(TDelegate));
+        }
+        catch
+        {
+            return null;
         }
     }
 
