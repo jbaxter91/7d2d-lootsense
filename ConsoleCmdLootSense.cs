@@ -18,6 +18,7 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
         sb.AppendLine("  pm_lootsense system <on|off>");
         sb.AppendLine("  pm_lootsense scanning <on|off>");
         sb.AppendLine("  pm_lootsense rendering <on|off>");
+        sb.AppendLine("  pm_lootsense perf <on|off>");
         sb.AppendLine("  pm_lootsense dump");
         return sb.ToString();
     }
@@ -110,6 +111,12 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
             case "rendering":
             case "overlay":
                 HandleToggle(_params, LootSense.TrySetRenderingState, "rendering");
+                break;
+
+            case "perf":
+            case "profiler":
+            case "performance":
+                HandleToggle(_params, LootSense.TrySetProfilerState, "profiler");
                 break;
 
             case "status":

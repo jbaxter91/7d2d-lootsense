@@ -35,6 +35,9 @@ public static class LootSense
     internal static bool TrySetRenderingState(string token, out string message)
         => Controller.TrySetRenderingState(token, out message);
 
+    internal static bool TrySetProfilerState(string token, out string message)
+        => Controller.TrySetProfilerState(token, out message);
+
     internal static string GetHighlightModeSummary()
         => Controller.GetHighlightModeSummary();
 

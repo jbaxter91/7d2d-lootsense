@@ -38,6 +38,7 @@ internal sealed class LootScanner
 
     private readonly Dictionary<int, Mesh> _meshCache = new();
     private readonly Dictionary<int, Vector3> _meshPivotCache = new();
+    private double _lastScanDurationMs;
 
     private const int ChunkCoordShift = 4;
 
@@ -46,57 +47,68 @@ internal sealed class LootScanner
         _verboseLogging = verboseLogging;
     }
 
+    public double LastScanDurationMs => _lastScanDurationMs;
+
     public void ScanAndMark(EntityPlayerLocal player, float radius, float now, MarkerRepository repository)
     {
-        var world = player.world;
-        if (world == null)
-            return;
-
-        Vector3 origin = player.GetPosition();
-        var center = new Vector3i(
-            Mathf.FloorToInt(origin.x),
-            Mathf.FloorToInt(origin.y),
-            Mathf.FloorToInt(origin.z)
-        );
-
-        int r = Mathf.CeilToInt(radius);
-        if (r <= 0)
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        try
         {
-            repository.Clear();
-            return;
-        }
+            var world = player.world;
+            if (world == null)
+                return;
 
-        EnsureScanOffsets(r);
-        int totalOffsets = _scanOffsets.Count;
-        if (totalOffsets == 0)
-            return;
+            Vector3 origin = player.GetPosition();
+            var center = new Vector3i(
+                Mathf.FloorToInt(origin.x),
+                Mathf.FloorToInt(origin.y),
+                Mathf.FloorToInt(origin.z)
+            );
 
-        int batchSize = Mathf.Min(totalOffsets, MaxOffsetsPerScan);
-        _scratchMarkers.Clear();
-
-        for (int i = 0; i < batchSize; i++)
-        {
-            var offset = _scanOffsets[_scanOffsetCursor];
-            _scanOffsetCursor++;
-            if (_scanOffsetCursor >= totalOffsets)
-                _scanOffsetCursor = 0;
-
-            var pos = new Vector3i(center.x + offset.x, center.y + offset.y, center.z + offset.z);
-            if (!IsLootableAndUnopened(world, pos, out string verboseState, out BlockValue blockValue, out object visualSource))
-                continue;
-
-            var marker = BuildLootMarker(pos, blockValue, visualSource, now);
-            _scratchMarkers[pos] = marker;
-
-            if (_verboseLogging && !_loggedPositions.Contains(pos))
+            int r = Mathf.CeilToInt(radius);
+            if (r <= 0)
             {
-                if (!string.IsNullOrEmpty(verboseState))
-                    Debug.Log(verboseState);
-                _loggedPositions.Add(pos);
+                repository.Clear();
+                return;
             }
-        }
 
-        repository.ApplyUpdates(_scratchMarkers);
+            EnsureScanOffsets(r);
+            int totalOffsets = _scanOffsets.Count;
+            if (totalOffsets == 0)
+                return;
+
+            int batchSize = Mathf.Min(totalOffsets, MaxOffsetsPerScan);
+            _scratchMarkers.Clear();
+
+            for (int i = 0; i < batchSize; i++)
+            {
+                var offset = _scanOffsets[_scanOffsetCursor];
+                _scanOffsetCursor++;
+                if (_scanOffsetCursor >= totalOffsets)
+                    _scanOffsetCursor = 0;
+
+                var pos = new Vector3i(center.x + offset.x, center.y + offset.y, center.z + offset.z);
+                if (!IsLootableAndUnopened(world, pos, out string verboseState, out BlockValue blockValue, out object visualSource))
+                    continue;
+
+                var marker = BuildLootMarker(pos, blockValue, visualSource, now);
+                _scratchMarkers[pos] = marker;
+
+                if (_verboseLogging && !_loggedPositions.Contains(pos))
+                {
+                    if (!string.IsNullOrEmpty(verboseState))
+                        Debug.Log(verboseState);
+                    _loggedPositions.Add(pos);
+                }
+            }
+
+            repository.ApplyUpdates(_scratchMarkers);
+        }
+        finally
+        {
+            stopwatch.Stop();
+            _lastScanDurationMs = stopwatch.Elapsed.TotalMilliseconds;
+        }
     }
 
     public bool TryRefreshMarker(World world, Vector3i position, float timestamp, out LootMarker marker)

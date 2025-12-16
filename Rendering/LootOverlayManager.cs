@@ -42,6 +42,11 @@ internal sealed class LootOverlayManager
     private float _nextOverlayTraceTime;
     private float _nextDebugPingTime;
     private bool _renderingEnabled = true;
+    private double _lastRenderDurationMs;
+    private int _lastSampleFrame = -1;
+    private bool _hasSampleThisFrame;
+
+    public double LastRenderDurationMs => _lastRenderDurationMs;
 
     public LootOverlayManager(LootSensePreferences preferences, MarkerRepository markerRepository, bool debugMode, bool positionTraceLogging, float overlayTraceIntervalSeconds)
     {
@@ -130,14 +135,36 @@ internal sealed class LootOverlayManager
 
     internal void DrawForCamera(Camera cam)
     {
+        int currentFrame = Time.frameCount;
+        if (currentFrame != _lastSampleFrame)
+        {
+            _lastSampleFrame = currentFrame;
+            _hasSampleThisFrame = false;
+        }
+
+        if (!_renderingEnabled)
+        {
+            if (!_hasSampleThisFrame)
+            {
+                _lastRenderDurationMs = 0;
+                _hasSampleThisFrame = true;
+            }
+            return;
+        }
+
+        if (ShouldSkipCamera(cam))
+        {
+            if (!_hasSampleThisFrame)
+            {
+                _lastRenderDurationMs = 0;
+                _hasSampleThisFrame = true;
+            }
+            return;
+        }
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            if (!_renderingEnabled)
-                return;
-
-            if (ShouldSkipCamera(cam))
-                return;
-
             bool iconMode = _preferences.HighlightMode == HighlightMode.Icon;
 
             if (iconMode)
@@ -184,6 +211,12 @@ internal sealed class LootOverlayManager
         catch (Exception e)
         {
             Debug.LogWarning($"[PerceptionMasteryLootSense] Overlay draw error: {e.Message}");
+        }
+        finally
+        {
+            stopwatch.Stop();
+            _lastRenderDurationMs = stopwatch.Elapsed.TotalMilliseconds;
+            _hasSampleThisFrame = true;
         }
     }
 

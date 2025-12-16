@@ -1,3 +1,4 @@
+using System.Globalization;
 using UnityEngine;
 
 internal sealed class LootSenseController
@@ -20,6 +21,7 @@ internal sealed class LootSenseController
     private readonly MarkerRepository _markerRepository;
     private readonly LootScanner _scanner;
     private readonly LootOverlayManager _overlay;
+    private readonly LootSenseProfilerDisplay _profilerDisplay;
 
     private float _nextScanTime;
     private readonly object _scanGateLock = new();
@@ -32,6 +34,7 @@ internal sealed class LootSenseController
     private bool _systemEnabled = true;
     private bool _scanningEnabled = true;
     private bool _renderingEnabled = true;
+    private bool _profilerEnabled;
 
     public LootSenseController()
     {
@@ -40,6 +43,7 @@ internal sealed class LootSenseController
         _scanner = new LootScanner(VerboseLogging);
         _overlay = new LootOverlayManager(_preferences, _markerRepository, DebugMode, PositionTraceLogging, OverlayTraceIntervalSeconds);
         _overlay.NotifyPreferencesChanged();
+        _profilerDisplay = new LootSenseProfilerDisplay(BuildProfilerReadout);
     }
 
     public void OnPlayerUpdate(EntityPlayerLocal player)
@@ -215,13 +219,31 @@ internal sealed class LootSenseController
         return true;
     }
 
+    public bool TrySetProfilerState(string token, out string message)
+    {
+        if (!TryParseToggle(token, out bool enabled, out message))
+            return false;
+
+        if (_profilerEnabled == enabled)
+        {
+            message = $"Profiler already {(enabled ? "enabled" : "disabled")}.";
+            return true;
+        }
+
+        _profilerEnabled = enabled;
+        _profilerDisplay.SetEnabled(enabled);
+        message = enabled ? "LootSense profiler display enabled." : "LootSense profiler display disabled.";
+        return true;
+    }
+
     public string GetHighlightModeSummary()
     {
         var summary = _preferences.BuildStatusSummary(_lastComputedRadius);
         return string.Concat(summary,
             " system=", FormatToggle(_systemEnabled),
             " scanning=", FormatToggle(_scanningEnabled),
-            " rendering=", FormatToggle(_renderingEnabled));
+            " rendering=", FormatToggle(_renderingEnabled),
+            " profiler=", FormatToggle(_profilerEnabled));
     }
 
     public string GetConfigDump()
@@ -231,6 +253,7 @@ internal sealed class LootSenseController
             "\n  systemEnabled=", _systemEnabled ? "true" : "false",
             "\n  scanningEnabled=", _scanningEnabled ? "true" : "false",
             "\n  renderingEnabled=", _renderingEnabled ? "true" : "false",
+            "\n  profilerEnabled=", _profilerEnabled ? "true" : "false",
             "\n");
     }
 
@@ -281,6 +304,22 @@ internal sealed class LootSenseController
     {
         bool shouldRender = _systemEnabled && _renderingEnabled;
         _overlay.SetRenderingEnabled(shouldRender);
+    }
+
+    private string BuildProfilerReadout()
+    {
+        double scanMs = _scanner.LastScanDurationMs;
+        double renderMs = _overlay.LastRenderDurationMs;
+        int markerCount = _markerRepository.Count;
+        float dt = Time.smoothDeltaTime > 0f ? Time.smoothDeltaTime : Time.deltaTime;
+        float fps = dt > 0f ? 1f / dt : 0f;
+
+        return string.Format(CultureInfo.InvariantCulture,
+            "LootSense Profiler\nScanning: {0:0.00} ms\nRendering: {1:0.00} ms\nMarkers: {2}\nFPS: {3:0.0}",
+            scanMs,
+            renderMs,
+            markerCount,
+            fps);
     }
 
     private static bool TryParseToggle(string token, out bool enabled, out string message)
