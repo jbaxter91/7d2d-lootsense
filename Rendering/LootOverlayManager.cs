@@ -5,6 +5,9 @@ using System.Text;
 using UnityEngine;
 using UnityEngine.Rendering;
 
+/// <summary>
+/// Owns the highlight overlay lifecycle, including resource setup and per-camera drawing.
+/// </summary>
 internal sealed class LootOverlayManager
 {
     private const float IconVerticalOffset = 0f;
@@ -26,17 +29,12 @@ internal sealed class LootOverlayManager
 
     private LootSenseOverlayBehaviour _overlayBehaviour;
 
-    private Material _fillMaterial;
-    private Material _outlineMaterial;
     private Material _iconMaterial;
     private Mesh _iconQuadMesh;
     private Texture2D _iconTexture;
     private Sprite _iconSprite;
     private Texture2D _generatedIconTexture;
     private bool _loggedMissingIcon;
-
-    private Mesh _fallbackCubeMesh;
-    private Vector3 _fallbackCubePivot;
 
     private Vector3 _worldOriginOffset = Vector3.zero;
     private float _nextOverlayTraceTime;
@@ -46,8 +44,14 @@ internal sealed class LootOverlayManager
     private int _lastSampleFrame = -1;
     private bool _hasSampleThisFrame;
 
+    /// <summary>
+    /// Duration in milliseconds of the most recent overlay render pass.
+    /// </summary>
     public double LastRenderDurationMs => _lastRenderDurationMs;
 
+    /// <summary>
+    /// Creates the overlay manager with shared dependencies and runtime tracing preferences.
+    /// </summary>
     public LootOverlayManager(LootSensePreferences preferences, MarkerRepository markerRepository, bool debugMode, bool positionTraceLogging, float overlayTraceIntervalSeconds)
     {
         _preferences = preferences;
@@ -57,6 +61,9 @@ internal sealed class LootOverlayManager
         _overlayTraceIntervalSeconds = overlayTraceIntervalSeconds;
     }
 
+    /// <summary>
+    /// Creates the persistent overlay GameObject/behaviour the first time rendering is requested.
+    /// </summary>
     public void EnsureOverlay()
     {
         if (!_renderingEnabled)
@@ -78,6 +85,9 @@ internal sealed class LootOverlayManager
             Debug.Log("[PerceptionMasteryLootSense] Overlay renderer created.");
     }
 
+    /// <summary>
+    /// External toggles can suspend rendering without tearing down all cached resources.
+    /// </summary>
     public void SetRenderingEnabled(bool enabled)
     {
         _renderingEnabled = enabled;
@@ -92,12 +102,18 @@ internal sealed class LootOverlayManager
         EnsureOverlay();
     }
 
+    /// <summary>
+    /// Reapplies material colors/UVs whenever preferences mutate.
+    /// </summary>
     public void NotifyPreferencesChanged()
     {
         ApplyVisualSettings();
         ApplyIconUVs();
     }
 
+    /// <summary>
+    /// Skip UI/preview cameras so the overlay only draws on gameplay views.
+    /// </summary>
     private bool ShouldSkipCamera(Camera cam)
     {
         if (cam == null)
@@ -113,26 +129,21 @@ internal sealed class LootOverlayManager
         return false;
     }
 
+    /// <summary>
+    /// Pushes the latest colors/alpha values into cached materials.
+    /// </summary>
     private void ApplyVisualSettings()
     {
         var alpha = _preferences.Alpha;
-        var fillColor = new Color(_preferences.UserColor.r, _preferences.UserColor.g, _preferences.UserColor.b, alpha);
-        var outlineColor = new Color(_preferences.UserColor.r, _preferences.UserColor.g, _preferences.UserColor.b, Mathf.Clamp01(alpha * 1.35f));
-
-        if (_fillMaterial != null)
-        {
-            _fillMaterial.SetColor("_Color", fillColor);
-            _fillMaterial.EnableKeyword("_EMISSION");
-            _fillMaterial.SetColor("_EmissionColor", fillColor * 2.2f);
-        }
-
-        if (_outlineMaterial != null)
-            _outlineMaterial.SetColor("_Color", outlineColor);
+        var iconColor = new Color(_preferences.UserColor.r, _preferences.UserColor.g, _preferences.UserColor.b, alpha);
 
         if (_iconMaterial != null)
-            _iconMaterial.color = fillColor;
+            _iconMaterial.color = iconColor;
     }
 
+    /// <summary>
+    /// Main entry invoked for each eligible camera; handles resource checks, sampling, and timing.
+    /// </summary>
     internal void DrawForCamera(Camera cam)
     {
         int currentFrame = Time.frameCount;
@@ -165,19 +176,8 @@ internal sealed class LootOverlayManager
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            bool iconMode = _preferences.HighlightMode == HighlightMode.Icon;
-
-            if (iconMode)
-            {
-                if (!EnsureIconResources())
-                    return;
-            }
-            else
-            {
-                EnsureBoxResources();
-                if (_fillMaterial == null || _outlineMaterial == null)
-                    return;
-            }
+            if (!EnsureIconResources())
+                return;
 
             var snapshot = _markerRepository.Snapshot();
             if (snapshot.Length == 0)
@@ -197,16 +197,10 @@ internal sealed class LootOverlayManager
                 LogOverlayTrace(cam, snapshot);
             }
 
-            if (iconMode)
-                GL.Clear(true, false, Color.black);
+            GL.Clear(true, false, Color.black);
 
             foreach (var marker in snapshot)
-            {
-                if (iconMode)
-                    DrawIconForMarker(marker, cam);
-                else
-                    DrawBoxForMarker(marker);
-            }
+                DrawIconForMarker(marker, cam);
         }
         catch (Exception e)
         {
@@ -220,6 +214,9 @@ internal sealed class LootOverlayManager
         }
     }
 
+    /// <summary>
+    /// Renders a billboarded icon for the given marker when icon mode is active.
+    /// </summary>
     private void DrawIconForMarker(LootMarker marker, Camera cam)
     {
         if (_iconMaterial == null || _iconQuadMesh == null)
@@ -245,29 +242,9 @@ internal sealed class LootOverlayManager
             Graphics.DrawMeshNow(_iconQuadMesh, matrix);
     }
 
-    private void DrawBoxForMarker(LootMarker marker)
-    {
-        var cube = EnsureFallbackCubeMesh();
-        if (cube == null || _fillMaterial == null || _outlineMaterial == null)
-            return;
-
-        float fillScale = Mathf.Max(0f, _preferences.BoxScale);
-        if (fillScale <= 0f)
-            return;
-
-        var worldCenter = new Vector3(marker.Position.x + 0.5f, marker.Position.y + 0.5f, marker.Position.z + 0.5f);
-        var renderCenter = worldCenter - _worldOriginOffset;
-
-        var fillMatrix = Matrix4x4.TRS(renderCenter, Quaternion.identity, Vector3.one * fillScale);
-        if (_fillMaterial.SetPass(0))
-            Graphics.DrawMeshNow(cube, fillMatrix);
-
-        float outlineScale = Mathf.Max(fillScale, _preferences.OutlineScale);
-        var outlineMatrix = Matrix4x4.TRS(renderCenter, Quaternion.identity, Vector3.one * outlineScale);
-        if (_outlineMaterial.SetPass(0))
-            Graphics.DrawMeshNow(cube, outlineMatrix);
-    }
-
+    /// <summary>
+    /// Periodically logs camera/marker positional data when debug tracing is enabled.
+    /// </summary>
     private void LogOverlayTrace(Camera cam, LootMarker[] snapshot)
     {
         var sb = new StringBuilder();
@@ -301,6 +278,9 @@ internal sealed class LootOverlayManager
         Debug.Log(sb.ToString());
     }
 
+    /// <summary>
+    /// Keeps gizmos aligned when Unity shifts the floating origin in large worlds.
+    /// </summary>
     private void RefreshWorldOriginOffset()
     {
         try
@@ -326,64 +306,9 @@ internal sealed class LootOverlayManager
         }
     }
 
-    private void EnsureBoxResources()
-    {
-        try
-        {
-            Shader shader = Shader.Find("Hidden/Internal-Colored");
-            if (shader == null)
-            {
-                Debug.LogWarning("[PerceptionMasteryLootSense] Hidden/Internal-Colored not found. Cannot draw highlight overlay.");
-                return;
-            }
-
-            if (_fillMaterial == null)
-            {
-                _fillMaterial = new Material(shader)
-                {
-                    name = "PMLootSenseFillMaterial",
-                    hideFlags = HideFlags.HideAndDontSave,
-                    renderQueue = 5000
-                };
-
-                ConfigureHighlightMaterial(_fillMaterial);
-            }
-
-            if (_outlineMaterial == null)
-            {
-                _outlineMaterial = new Material(shader)
-                {
-                    name = "PMLootSenseOutlineMaterial",
-                    hideFlags = HideFlags.HideAndDontSave,
-                    renderQueue = 5001
-                };
-
-                ConfigureHighlightMaterial(_outlineMaterial);
-                _outlineMaterial.SetInt("_Cull", (int)CullMode.Front);
-            }
-
-            ApplyVisualSettings();
-        }
-        catch (Exception e)
-        {
-            Debug.LogWarning($"[PerceptionMasteryLootSense] Failed to create highlight materials: {e.Message}");
-            _fillMaterial = null;
-            _outlineMaterial = null;
-        }
-    }
-
-    private void ConfigureHighlightMaterial(Material mat)
-    {
-        if (mat == null)
-            return;
-
-        mat.SetInt("_ZWrite", 0);
-        mat.SetInt("_ZTest", (int)CompareFunction.Always);
-        mat.SetInt("_SrcBlend", (int)BlendMode.SrcAlpha);
-        mat.SetInt("_DstBlend", (int)BlendMode.OneMinusSrcAlpha);
-        mat.SetInt("_Cull", (int)CullMode.Off);
-    }
-
+    /// <summary>
+    /// Resolves the icon mesh, sprite, and materials used for icon highlight mode.
+    /// </summary>
     private bool EnsureIconResources()
     {
         try
@@ -438,6 +363,9 @@ internal sealed class LootOverlayManager
         }
     }
 
+    /// <summary>
+    /// Creates the billboard quad mesh used for icon rendering.
+    /// </summary>
     private Mesh BuildIconQuadMesh()
     {
         var mesh = new Mesh
@@ -460,6 +388,9 @@ internal sealed class LootOverlayManager
         return mesh;
     }
 
+    /// <summary>
+    /// Attempts to find the perception mastery sprite from loaded resources.
+    /// </summary>
     private Sprite LocatePerceptionIconSprite()
     {
         try
@@ -485,6 +416,9 @@ internal sealed class LootOverlayManager
         return null;
     }
 
+    /// <summary>
+    /// Looks for a loose texture fallback when the sprite asset cannot be found.
+    /// </summary>
     private Texture2D LocatePerceptionIconTextureFallback()
     {
         try
@@ -504,6 +438,9 @@ internal sealed class LootOverlayManager
         return EnsureGeneratedIconTexture();
     }
 
+    /// <summary>
+    /// Generates a tiny eye texture fallback when the perception sprite is not present.
+    /// </summary>
     private Texture2D EnsureGeneratedIconTexture()
     {
         if (_generatedIconTexture != null)
@@ -560,6 +497,9 @@ internal sealed class LootOverlayManager
         return tex;
     }
 
+    /// <summary>
+    /// Updates the quad UVs to match the selected sprite or resets to defaults.
+    /// </summary>
     private void ApplyIconUVs()
     {
         if (_iconQuadMesh == null)
@@ -593,34 +533,23 @@ internal sealed class LootOverlayManager
         }
     }
 
-    private Mesh EnsureFallbackCubeMesh()
-    {
-        if (_fallbackCubeMesh != null)
-            return _fallbackCubeMesh;
-
-        var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        var meshFilter = cube.GetComponent<MeshFilter>();
-        if (meshFilter != null)
-        {
-            _fallbackCubeMesh = UnityEngine.Object.Instantiate(meshFilter.sharedMesh);
-            _fallbackCubeMesh.name = "PMLootSenseOverlayCube";
-            _fallbackCubePivot = -_fallbackCubeMesh.bounds.min;
-        }
-
-        UnityEngine.Object.Destroy(cube);
-        return _fallbackCubeMesh;
-    }
-
+    // Lightweight behaviour that bridges Unity's render callbacks back into this manager.
     private sealed class LootSenseOverlayBehaviour : MonoBehaviour
     {
         private LootOverlayManager _manager;
         private bool _srpActive;
 
+        /// <summary>
+        /// Stores the manager reference so callbacks can forward drawing requests.
+        /// </summary>
         public void Initialize(LootOverlayManager manager)
         {
             _manager = manager;
         }
 
+        /// <summary>
+        /// Subscribes to render callbacks depending on whether SRP is active.
+        /// </summary>
         private void OnEnable()
         {
             _srpActive = GraphicsSettings.renderPipelineAsset != null;
@@ -628,12 +557,18 @@ internal sealed class LootOverlayManager
             RenderPipelineManager.endCameraRendering += OnEndCameraRenderingSRP;
         }
 
+        /// <summary>
+        /// Unsubscribes from all render callbacks when disabled or destroyed.
+        /// </summary>
         private void OnDisable()
         {
             Camera.onPostRender -= OnPostRenderBuiltin;
             RenderPipelineManager.endCameraRendering -= OnEndCameraRenderingSRP;
         }
 
+        /// <summary>
+        /// Handles legacy pipeline post-render events.
+        /// </summary>
         private void OnPostRenderBuiltin(Camera cam)
         {
             if (_srpActive)
@@ -641,6 +576,9 @@ internal sealed class LootOverlayManager
             _manager?.DrawForCamera(cam);
         }
 
+        /// <summary>
+        /// Handles Scriptable Render Pipeline callbacks and forwards drawing to the manager.
+        /// </summary>
         private void OnEndCameraRenderingSRP(ScriptableRenderContext ctx, Camera cam)
         {
             _manager?.DrawForCamera(cam);

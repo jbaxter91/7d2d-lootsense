@@ -3,8 +3,14 @@ using System.Reflection;
 using HarmonyLib;
 using UnityEngine;
 
+/// <summary>
+/// Mod bootstrapper that applies Harmony patches and registers the console command.
+/// </summary>
 public class Init : IModApi
 {
+    /// <summary>
+    /// Entry point invoked by the game when the mod loads; wires up Harmony and console commands.
+    /// </summary>
     public void InitMod(Mod modInstance)
     {
         var harmony = new Harmony("com.you.perceptionmastery.lootsense.unopenedonly");
@@ -15,6 +21,9 @@ public class Init : IModApi
 
     }
 
+    /// <summary>
+    /// Reflectively registers the pm_lootsense console command with SdtdConsole.
+    /// </summary>
     private static void RegisterConsoleCommand()
     {
         try

@@ -1,16 +1,25 @@
 using System.Collections.Generic;
 using System.Text;
 
+/// <summary>
+/// Handles all pm_lootsense console subcommands so players can tune the overlay at runtime.
+/// </summary>
 public class ConsoleCmdLootSense : ConsoleCmdAbstract
 {
+    /// <summary>
+    /// Describes the command in the 7DTD help listing.
+    /// </summary>
     public override string getDescription() => "Controls PerceptionMastery LootSense highlight visuals.";
 
+    /// <summary>
+    /// Provides the usage text shown when players request command help.
+    /// </summary>
     public override string getHelp()
     {
         var sb = new StringBuilder();
         sb.AppendLine("Usage:");
         sb.AppendLine("  pm_lootsense status");
-        sb.AppendLine("  pm_lootsense mode <box|icon>");
+        sb.AppendLine("  pm_lootsense mode icon   (locked)");
         sb.AppendLine("  pm_lootsense opacity <0-100>");
         sb.AppendLine("  pm_lootsense size <0-200>");
         sb.AppendLine("  pm_lootsense color <hex>");
@@ -23,8 +32,14 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Returns the command aliases recognized by the console.
+    /// </summary>
     public override string[] getCommands() => new[] { "pm_lootsense", "pmls" };
 
+    /// <summary>
+    /// Routes user arguments to the appropriate toggle or configuration handler.
+    /// </summary>
     public override void Execute(List<string> _params, CommandSenderInfo _senderInfo)
     {
         if (_params == null || _params.Count == 0)
@@ -133,11 +148,17 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
         }
     }
 
+    /// <summary>
+    /// Prints the current overlay configuration summary to the console.
+    /// </summary>
     private static void OutputStatus()
     {
         Output($"[LootSense] {LootSense.GetHighlightModeSummary()}");
     }
 
+    /// <summary>
+    /// Emits a message to the SdtdConsole if it is available.
+    /// </summary>
     private static void Output(string text)
     {
         var console = SdtdConsole.Instance;
@@ -147,6 +168,9 @@ public class ConsoleCmdLootSense : ConsoleCmdAbstract
 
     private delegate bool ToggleSetter(string token, out string message);
 
+    /// <summary>
+    /// Shared toggle plumbing keeps every on/off command consistent and reduces repetitive guard code.
+    /// </summary>
     private static void HandleToggle(List<string> args, ToggleSetter setter, string label)
     {
         if (args.Count < 2)

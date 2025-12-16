@@ -6,6 +6,9 @@ using System.Linq;
 using System.Reflection;
 using UnityEngine;
 
+/// <summary>
+/// Discovers unopened loot sources, builds marker geometry, and feeds results to the repository.
+/// </summary>
 internal sealed class LootScanner
 {
     private const int MaxOffsetsPerScan = 1600;
@@ -52,13 +55,22 @@ internal sealed class LootScanner
 
     private const int ChunkCoordShift = 4;
 
+    /// <summary>
+    /// Creates the scanner, optionally enabling verbose logging for troubleshooting.
+    /// </summary>
     public LootScanner(bool verboseLogging)
     {
         _verboseLogging = verboseLogging;
     }
 
+    /// <summary>
+    /// Duration of the last completed scan batch in milliseconds.
+    /// </summary>
     public double LastScanDurationMs => _lastScanDurationMs;
 
+    /// <summary>
+    /// Performs a time-sliced scan around the player to avoid blocking the main thread.
+    /// </summary>
     public void ScanAndMark(EntityPlayerLocal player, float radius, float now, MarkerRepository repository)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -131,6 +143,9 @@ internal sealed class LootScanner
         }
     }
 
+    /// <summary>
+    /// Revalidates a single marker position to see if it still represents unopened loot.
+    /// </summary>
     public bool TryRefreshMarker(World world, Vector3i position, float timestamp, out LootMarker marker)
     {
         marker = default;
@@ -141,6 +156,9 @@ internal sealed class LootScanner
         return true;
     }
 
+    /// <summary>
+    /// Uses reflection to query the player's current perk rank, working across game versions.
+    /// </summary>
     public int GetPerkRank(EntityPlayerLocal player, string perkName)
     {
         var progression = player?.Progression;
@@ -175,6 +193,9 @@ internal sealed class LootScanner
         return 0;
     }
 
+    /// <summary>
+    /// Precomputes and sorts sphere offsets so subsequent scans can iterate without allocations.
+    /// </summary>
     private void EnsureScanOffsets(int radius)
     {
         if (radius == _scanOffsetsRadius && _scanOffsets.Count > 0)
@@ -206,6 +227,9 @@ internal sealed class LootScanner
         });
     }
 
+    /// <summary>
+    /// Builds a LootMarker using either a discovered mesh or a fallback cube.
+    /// </summary>
     private LootMarker BuildLootMarker(Vector3i pos, BlockValue blockValue, object visualSource, float timestamp)
     {
         Mesh mesh;
@@ -230,6 +254,9 @@ internal sealed class LootScanner
         return new LootMarker(pos, mesh, pivot, localCenter, rotation, timestamp);
     }
 
+    /// <summary>
+    /// Determines whether the block/tile entity at the given position represents unopened loot.
+    /// </summary>
     private bool IsLootableAndUnopened(World world, Vector3i pos, out string verbose, out BlockValue blockValue, out object tileEntity)
     {
         verbose = null;
@@ -248,14 +275,16 @@ internal sealed class LootScanner
             if (te != null)
             {
                 tileEntity = te;
-                string tn = te.GetType().Name.ToLowerInvariant();
-                if (LooksLikeDoorType(tn))
+                string typeName = te.GetType().Name;
+                if (LooksLikeDoorType(typeName))
                 {
                     verbose = BuildVerboseEntry(pos, te.GetType().Name, null, -1, true) + " (door skipped)";
                     return false;
                 }
 
-                bool looksLikeContainer = tn.Contains("loot") || tn.Contains("container") || tn.Contains("secure");
+                bool looksLikeContainer = ContainsOrdinalIgnoreCase(typeName, "loot")
+                                          || ContainsOrdinalIgnoreCase(typeName, "container")
+                                          || ContainsOrdinalIgnoreCase(typeName, "secure");
                 if (!looksLikeContainer) return false;
 
                 bool? opened = TryGetOpenedTouched(te);
@@ -283,7 +312,7 @@ internal sealed class LootScanner
 
                 return false;
             }
-            else if (LooksLikeDoorType(block.GetType().Name.ToLowerInvariant()))
+            else if (LooksLikeDoorType(block.GetType().Name))
             {
                 verbose = BuildVerboseEntry(pos, block.GetType().Name, null, -1, false) + " (door skipped)";
                 return false;
@@ -297,6 +326,9 @@ internal sealed class LootScanner
         }
     }
 
+    /// <summary>
+    /// Formats verbose logging strings that describe why a candidate was included or skipped.
+    /// </summary>
     private string BuildVerboseEntry(Vector3i pos, string name, bool? opened, int lootLevel, bool tileEntity)
     {
         if (!_verboseLogging) return null;
@@ -308,19 +340,25 @@ internal sealed class LootScanner
         return $"[PerceptionMasteryLootSense] {(tileEntity ? "TE" : "Block")} {name} at {pos} center={centerTxt} status={openedTxt} lootList={lootTxt}";
     }
 
-    private bool LooksLikeDoorType(string loweredTypeName)
+    /// <summary>
+    /// Heuristic door detection used to skip obvious non-loot interactables.
+    /// </summary>
+    private static bool LooksLikeDoorType(string typeName)
     {
-        if (string.IsNullOrEmpty(loweredTypeName))
+        if (string.IsNullOrEmpty(typeName))
             return false;
 
-        return loweredTypeName.Contains("door")
-               || loweredTypeName.Contains("hatch")
-               || loweredTypeName.Contains("drawbridge")
-               || loweredTypeName.Contains("garage")
-               || loweredTypeName.Contains("vaultdoor")
-               || loweredTypeName.Contains("portcullis");
+        return ContainsOrdinalIgnoreCase(typeName, "door")
+               || ContainsOrdinalIgnoreCase(typeName, "hatch")
+               || ContainsOrdinalIgnoreCase(typeName, "drawbridge")
+               || ContainsOrdinalIgnoreCase(typeName, "garage")
+               || ContainsOrdinalIgnoreCase(typeName, "vaultdoor")
+               || ContainsOrdinalIgnoreCase(typeName, "portcullis");
     }
 
+    /// <summary>
+    /// Uses cached delegates to see if the target chunk is currently loaded.
+    /// </summary>
     private bool IsBlockInLoadedChunk(World world, Vector3i pos)
     {
         if (world == null)
@@ -353,6 +391,9 @@ internal sealed class LootScanner
         return true;
     }
 
+    /// <summary>
+    /// Attempts to infer whether a block has already been opened using block meta/properties.
+    /// </summary>
     private bool? TryInferOpenedFromBlock(BlockValue blockValue)
     {
         try
@@ -393,6 +434,9 @@ internal sealed class LootScanner
         return null;
     }
 
+    /// <summary>
+    /// Determines if a block type appears to represent loot and caches the decision per type id.
+    /// </summary>
     private bool BlockLooksLootable(Block block, int blockType)
     {
         if (block == null || blockType == 0)
@@ -406,16 +450,24 @@ internal sealed class LootScanner
         return result;
     }
 
+    /// <summary>
+    /// Performs the actual heuristic/property inspection to decide if a block can contain loot.
+    /// </summary>
     private bool EvaluateBlockLootable(Block block)
     {
         try
         {
-            string bn = (block.GetBlockName() ?? string.Empty).ToLowerInvariant();
-            string cn = block.GetType().Name.ToLowerInvariant();
+            string bn = block.GetBlockName() ?? string.Empty;
+            string cn = block.GetType().Name ?? string.Empty;
 
-            if (bn.Contains("cnt") || bn.Contains("crate") || bn.Contains("chest") || bn.Contains("safe") || bn.Contains("cabinet") || bn.Contains("loot"))
+            if (ContainsOrdinalIgnoreCase(bn, "cnt")
+                || ContainsOrdinalIgnoreCase(bn, "crate")
+                || ContainsOrdinalIgnoreCase(bn, "chest")
+                || ContainsOrdinalIgnoreCase(bn, "safe")
+                || ContainsOrdinalIgnoreCase(bn, "cabinet")
+                || ContainsOrdinalIgnoreCase(bn, "loot"))
                 return true;
-            if (cn.Contains("loot") || cn.Contains("container"))
+            if (ContainsOrdinalIgnoreCase(cn, "loot") || ContainsOrdinalIgnoreCase(cn, "container"))
                 return true;
 
             var propsProp = block.GetType().GetProperty("Properties", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
@@ -448,6 +500,9 @@ internal sealed class LootScanner
         return false;
     }
 
+    /// <summary>
+    /// Reads common loot list index fields/properties from a tile entity via reflection.
+    /// </summary>
     private int TryGetLootListIndex(object tileEntity)
     {
         try
@@ -468,6 +523,9 @@ internal sealed class LootScanner
         }
     }
 
+    /// <summary>
+    /// Pulls a loot index out of nested loot container objects when the TE itself has none.
+    /// </summary>
     private int ExtractLootIndex(object obj)
     {
         if (obj == null) return -1;
@@ -495,6 +553,9 @@ internal sealed class LootScanner
         return -1;
     }
 
+    /// <summary>
+    /// Checks various touched/opened flags exposed by loot tile entities.
+    /// </summary>
     private bool? TryGetOpenedTouched(object tileEntity)
     {
         try
@@ -531,6 +592,9 @@ internal sealed class LootScanner
         }
     }
 
+    /// <summary>
+    /// Shared helper to fetch a boolean field/property if it exists.
+    /// </summary>
     private bool TryGetBool(Type t, object obj, out bool value, params string[] names)
     {
         foreach (var n in names)
@@ -553,6 +617,9 @@ internal sealed class LootScanner
         return false;
     }
 
+    /// <summary>
+    /// Shared helper to fetch a long field/property if it exists.
+    /// </summary>
     private bool TryGetLong(Type t, object obj, out long value, params string[] names)
     {
         foreach (var n in names)
@@ -575,6 +642,9 @@ internal sealed class LootScanner
         return false;
     }
 
+    /// <summary>
+    /// Shared helper to fetch an int field/property if it exists.
+    /// </summary>
     private bool TryGetInt(Type t, object obj, out int value, params string[] names)
     {
         foreach (var n in names)
@@ -597,6 +667,9 @@ internal sealed class LootScanner
         return false;
     }
 
+    /// <summary>
+    /// Looks up and caches FieldInfo instances to avoid repeated reflection cost.
+    /// </summary>
     private FieldInfo GetCachedField(Type type, string name)
     {
         if (type == null || string.IsNullOrEmpty(name))
@@ -614,6 +687,9 @@ internal sealed class LootScanner
         }
     }
 
+    /// <summary>
+    /// Looks up and caches PropertyInfo instances to avoid repeated reflection cost.
+    /// </summary>
     private PropertyInfo GetCachedProperty(Type type, string name)
     {
         if (type == null || string.IsNullOrEmpty(name))
@@ -631,6 +707,9 @@ internal sealed class LootScanner
         }
     }
 
+    /// <summary>
+    /// Resolves a tile entity at a position using whichever world overload is available.
+    /// </summary>
     private object GetTileEntitySafe(World world, Vector3i pos)
     {
         try
@@ -653,6 +732,9 @@ internal sealed class LootScanner
         return null;
     }
 
+    /// <summary>
+    /// Caches Unity's cube mesh so scanning always has something to render markers with.
+    /// </summary>
     private Mesh EnsureFallbackCubeMesh()
     {
         if (_fallbackCubeMesh != null) return _fallbackCubeMesh;
@@ -670,6 +752,9 @@ internal sealed class LootScanner
         return _fallbackCubeMesh;
     }
 
+    /// <summary>
+    /// Attempts to reuse any available tile-entity mesh before falling back to block-based generation.
+    /// </summary>
     private bool TryResolveMesh(BlockValue blockValue, object visualSource, out Mesh mesh, out Vector3 pivot)
     {
         int cacheKey = blockValue.GetHashCode();
@@ -702,6 +787,9 @@ internal sealed class LootScanner
         return false;
     }
 
+    /// <summary>
+    /// Creates a mesh using the block's own shape/mesh accessors when no TE mesh is available.
+    /// </summary>
     private Mesh BuildMesh(BlockValue blockValue)
     {
         var block = blockValue.Block;
@@ -716,6 +804,9 @@ internal sealed class LootScanner
         return null;
     }
 
+    /// <summary>
+    /// Walks through mesh-providing methods on a block/shape to obtain renderable geometry.
+    /// </summary>
     private bool TryExtractMesh(object provider, Block block, BlockValue blockValue, out Mesh mesh)
     {
         mesh = null;
@@ -754,6 +845,9 @@ internal sealed class LootScanner
         return false;
     }
 
+    /// <summary>
+    /// Walks public/private members looking for cached meshes, game objects, or mesh descriptors.
+    /// </summary>
     private bool TryExtractMeshFromMembers(object provider, out Mesh mesh)
     {
         const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
@@ -784,6 +878,9 @@ internal sealed class LootScanner
         return false;
     }
 
+    /// <summary>
+    /// Heuristically converts arbitrary data (meshes, prefabs, descriptors) into something renderable.
+    /// </summary>
     private bool TryConvertObjectToMesh(string memberName, object candidate, out Mesh mesh)
     {
         mesh = null;
@@ -854,11 +951,17 @@ internal sealed class LootScanner
         return false;
     }
 
+    /// <summary>
+    /// Sanity-checks that a mesh has vertices and triangles before we try to draw it.
+    /// </summary>
     private bool IsRenderableMesh(Mesh mesh)
     {
         return mesh != null && mesh.vertexCount > 0 && mesh.triangles != null && mesh.triangles.Length > 0;
     }
 
+    /// <summary>
+    /// Some blocks expose MeshDescription-style structs; this helper builds live Mesh instances from them.
+    /// </summary>
     private bool TryBuildMeshFromDescription(object desc, string memberName, out Mesh mesh)
     {
         mesh = null;
@@ -949,6 +1052,17 @@ internal sealed class LootScanner
         }
     }
 
+    private static bool ContainsOrdinalIgnoreCase(string source, string value)
+    {
+        if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(value))
+            return false;
+
+        return source.IndexOf(value, StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+    /// <summary>
+    /// Builds strongly-typed delegates for frequently invoked World methods.
+    /// </summary>
     private static TDelegate CreateWorldDelegate<TDelegate>(Type worldType, string methodName, params Type[] parameterTypes)
         where TDelegate : Delegate
     {
@@ -969,6 +1083,9 @@ internal sealed class LootScanner
         }
     }
 
+    /// <summary>
+    /// Creates placeholder argument arrays so we can invoke mesh-building methods safely.
+    /// </summary>
     private object[] BuildMeshArgs(ParameterInfo[] parameters, Block block, BlockValue blockValue)
     {
         var args = new object[parameters.Length];
@@ -1033,6 +1150,9 @@ internal sealed class LootScanner
         return args;
     }
 
+    /// <summary>
+    /// Uses reflection to call into the game's rotation helpers for the given block value.
+    /// </summary>
     private Quaternion ResolveRotation(BlockValue blockValue)
     {
         try
@@ -1084,6 +1204,9 @@ internal sealed class LootScanner
         return Quaternion.identity;
     }
 
+    /// <summary>
+    /// Searches the assembly for a rotation helper method that returns a Quaternion.
+    /// </summary>
     private MethodInfo FindRotationMethod()
     {
         try

@@ -1,9 +1,11 @@
 using System;
 using System.Globalization;
-using System.Linq;
 using System.Text;
 using UnityEngine;
 
+/// <summary>
+/// Handles persistence, validation, and formatting of LootSense user-facing preferences.
+/// </summary>
 internal sealed class LootSensePreferences
 {
     private const string HighlightModePrefKey = "PMLootSense.HighlightMode";
@@ -12,16 +14,18 @@ internal sealed class LootSensePreferences
     private const string ColorPrefKey = "PMLootSense.Color";
     private const string RangePrefKey = "PMLootSense.RangeBonus";
 
-    private const float DefaultSizePercent = 100f;
-    private const float DefaultOpacityPercent = 80f;
-    private const string DefaultColorHex = "19FF19";
+    private const float DefaultSizePercent = 15f;
+    private const float DefaultOpacityPercent = 35f;
+    private const string DefaultColorHex = "DAA520";
+    private const float DefaultRangeBonusMeters = 4f;
     private const float RangeBonusMin = -10f;
     private const float RangeBonusMax = 30f;
 
-    private const float BoxScaleBase = 1.18f;
-    private const float OutlineScaleBase = 1.045f;
     private const float IconBaseSize = 0.9f;
 
+    /// <summary>
+    /// Loads previously stored preferences from PlayerPrefs or falls back to defaults.
+    /// </summary>
     public LootSensePreferences()
     {
         LoadHighlightPreference();
@@ -31,47 +35,27 @@ internal sealed class LootSensePreferences
     public HighlightMode HighlightMode { get; private set; } = HighlightMode.Icon;
     public float SizePercent { get; private set; } = DefaultSizePercent;
     public float OpacityPercent { get; private set; } = DefaultOpacityPercent;
-    public Color UserColor { get; private set; } = new(0.1f, 1f, 0.1f, 1f);
-    public float RangeBonusMeters { get; private set; }
+    public Color UserColor { get; private set; } = ParseDefaultColor();
+    public float RangeBonusMeters { get; private set; } = DefaultRangeBonusMeters;
 
     public float SizeScale => Mathf.Clamp(SizePercent, 0f, 200f) / 100f;
-    public float BoxScale => BoxScaleBase * Mathf.Max(SizeScale, 0f);
-    public float OutlineScale => BoxScale * OutlineScaleBase;
     public float IconScale => IconBaseSize * Mathf.Max(SizeScale, 0f);
     public float Alpha => Mathf.Clamp01(OpacityPercent / 100f);
     public string ColorHex => ColorUtility.ToHtmlStringRGB(UserColor);
 
+    /// <summary>
+    /// Highlight mode is fixed to icon rendering; method retained for compatibility.
+    /// </summary>
     public bool TrySetHighlightMode(string token, out HighlightMode mode, out string message)
     {
-        mode = HighlightMode;
-        message = null;
-
-        if (string.IsNullOrEmpty(token))
-        {
-            message = "Highlight mode name missing.";
-            return false;
-        }
-
-        if (token.Equals("solidbox", StringComparison.OrdinalIgnoreCase))
-            token = "box";
-
-        if (Enum.TryParse(token, true, out HighlightMode parsed))
-        {
-            if (HighlightMode != parsed)
-            {
-                HighlightMode = parsed;
-                SaveHighlightPreference(parsed);
-            }
-
-            mode = parsed;
-            return true;
-        }
-
-        string options = string.Join(", ", Enum.GetNames(typeof(HighlightMode)).Select(n => n.ToLowerInvariant()));
-        message = $"Unknown highlight mode '{token}'. Options: {options}";
+        mode = HighlightMode.Icon;
+        message = "Highlight mode is locked to icon rendering.";
         return false;
     }
 
+    /// <summary>
+    /// Updates overlay opacity when a valid percent is provided.
+    /// </summary>
     public bool TrySetOpacity(string token, out string message)
     {
         if (!TryParsePercent(token, 0f, 100f, out float value, out message))
@@ -83,6 +67,9 @@ internal sealed class LootSensePreferences
         return true;
     }
 
+    /// <summary>
+    /// Sets icon/box scale based on a percent input.
+    /// </summary>
     public bool TrySetSize(string token, out string message)
     {
         if (!TryParsePercent(token, 0f, 200f, out float value, out message))
@@ -94,6 +81,9 @@ internal sealed class LootSensePreferences
         return true;
     }
 
+    /// <summary>
+    /// Accepts HTML-style hex colors and persists the parsed color.
+    /// </summary>
     public bool TrySetColor(string token, out string message)
     {
         if (!TryParseColor(token, out var color))
@@ -108,6 +98,9 @@ internal sealed class LootSensePreferences
         return true;
     }
 
+    /// <summary>
+    /// Adds a delta to the range bonus while keeping it inside defined bounds.
+    /// </summary>
     public bool TryAdjustRange(string token, out string message)
     {
         message = null;
@@ -129,20 +122,24 @@ internal sealed class LootSensePreferences
         return true;
     }
 
+    /// <summary>
+    /// Builds a compact status string showing user-selected values and derived ranges.
+    /// </summary>
     public string BuildStatusSummary(float currentRadiusMeters)
     {
-        string options = string.Join(", ", Enum.GetNames(typeof(HighlightMode)).Select(n => n.ToLowerInvariant()));
         return string.Format(CultureInfo.InvariantCulture,
-            "mode={0} size={1:F0}% opacity={2:F0}% color=#{3} range={4} currentRange={5:F1}m options=[{6}]",
+            "mode={0} size={1:F0}% opacity={2:F0}% color=#{3} range={4} currentRange={5:F1}m",
             HighlightMode.ToString().ToLowerInvariant(),
             SizePercent,
             OpacityPercent,
             ColorHex,
             FormatMeters(RangeBonusMeters),
-            currentRadiusMeters,
-            options);
+            currentRadiusMeters);
     }
 
+    /// <summary>
+    /// Produces a multi-line dump of stored preferences plus rank previews for debugging.
+    /// </summary>
     public string BuildConfigDump(Func<int, float> rankPreviewFactory, float currentRadius)
     {
         var sb = new StringBuilder();
@@ -160,6 +157,9 @@ internal sealed class LootSensePreferences
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Attempts to parse a floating-point percent value within the provided bounds.
+    /// </summary>
     private static bool TryParsePercent(string token, float min, float max, out float value, out string message)
     {
         value = 0f;
@@ -181,6 +181,9 @@ internal sealed class LootSensePreferences
         return true;
     }
 
+    /// <summary>
+    /// Parses HTML hex colors, adding a leading # if the caller omitted it.
+    /// </summary>
     private static bool TryParseColor(string token, out Color color)
     {
         color = default;
@@ -198,8 +201,9 @@ internal sealed class LootSensePreferences
         return true;
     }
 
-    private static string FormatMeters(float value) => value >= 0f ? $"+{value:0.0}m" : $"{value:0.0}m";
-
+    /// <summary>
+    /// Reads the persisted highlight mode, defaulting to icon when invalid.
+    /// </summary>
     private void LoadHighlightPreference()
     {
         try
@@ -220,28 +224,50 @@ internal sealed class LootSensePreferences
         }
     }
 
+    /// <summary>
+    /// Restores size, opacity, range, and color preferences within safe bounds.
+    /// </summary>
     private void LoadVisualPreferences()
     {
         try
         {
             SizePercent = Mathf.Clamp(PlayerPrefs.GetFloat(SizePrefKey, DefaultSizePercent), 0f, 200f);
             OpacityPercent = Mathf.Clamp(PlayerPrefs.GetFloat(OpacityPrefKey, DefaultOpacityPercent), 0f, 100f);
-            RangeBonusMeters = Mathf.Clamp(PlayerPrefs.GetFloat(RangePrefKey, 0f), RangeBonusMin, RangeBonusMax);
+            RangeBonusMeters = Mathf.Clamp(PlayerPrefs.GetFloat(RangePrefKey, DefaultRangeBonusMeters), RangeBonusMin, RangeBonusMax);
 
             string storedColor = PlayerPrefs.GetString(ColorPrefKey, DefaultColorHex);
             if (!TryParseColor(storedColor, out var color))
-                color = new Color(0.1f, 1f, 0.1f, 1f);
+                color = ParseDefaultColor();
             UserColor = color;
         }
         catch
         {
             SizePercent = DefaultSizePercent;
             OpacityPercent = DefaultOpacityPercent;
-            UserColor = new Color(0.1f, 1f, 0.1f, 1f);
-            RangeBonusMeters = 0f;
+            UserColor = ParseDefaultColor();
+            RangeBonusMeters = DefaultRangeBonusMeters;
         }
     }
 
+    /// <summary>
+    /// Formats positive/negative meter offsets with explicit signs.
+    /// </summary>
+    private static string FormatMeters(float value) => value >= 0f ? $"+{value:0.0}m" : $"{value:0.0}m";
+
+    private static Color ParseDefaultColor()
+    {
+        if (ColorUtility.TryParseHtmlString("#" + DefaultColorHex, out var color))
+        {
+            color.a = 1f;
+            return color;
+        }
+
+        return new Color(0.8549f, 0.6470f, 0.1255f, 1f);
+    }
+
+    /// <summary>
+    /// Writes the selected highlight mode back into PlayerPrefs.
+    /// </summary>
     private void SaveHighlightPreference(HighlightMode mode)
     {
         try
@@ -255,6 +281,9 @@ internal sealed class LootSensePreferences
         }
     }
 
+    /// <summary>
+    /// Persists the current color choice as an RGB hex string.
+    /// </summary>
     private void SaveColorPreference()
     {
         try
@@ -268,6 +297,9 @@ internal sealed class LootSensePreferences
         }
     }
 
+    /// <summary>
+    /// Helper that stores a float in PlayerPrefs while guarding against exceptions.
+    /// </summary>
     private static void SaveFloat(string key, float value)
     {
         try

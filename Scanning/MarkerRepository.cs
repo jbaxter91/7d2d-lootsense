@@ -2,6 +2,9 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 
+/// <summary>
+/// Thread-safe storage for active loot markers plus logic for rechecking and pruning them.
+/// </summary>
 internal sealed class MarkerRepository
 {
     private readonly Dictionary<Vector3i, LootMarker> _activeMarkers = new(new Vector3iComparer());
@@ -13,6 +16,9 @@ internal sealed class MarkerRepository
     private readonly float _rangeGraceMeters;
     private readonly int _activeRechecksPerScan;
 
+    /// <summary>
+    /// Configures the repository with how long markers persist and how aggressively to recheck them.
+    /// </summary>
     public MarkerRepository(float markerTimeoutSeconds, float rangeGraceMeters, int activeRechecksPerScan)
     {
         _markerTimeoutSeconds = markerTimeoutSeconds;
@@ -20,6 +26,9 @@ internal sealed class MarkerRepository
         _activeRechecksPerScan = activeRechecksPerScan;
     }
 
+    /// <summary>
+    /// Number of live markers currently being tracked.
+    /// </summary>
     public int Count
     {
         get
@@ -29,12 +38,18 @@ internal sealed class MarkerRepository
         }
     }
 
+    /// <summary>
+    /// Returns a snapshot array of markers for rendering without holding the lock.
+    /// </summary>
     public LootMarker[] Snapshot()
     {
         lock (_lock)
             return _activeMarkers.Values.ToArray();
     }
 
+    /// <summary>
+    /// Removes every marker and clears any pending recheck state.
+    /// </summary>
     public void Clear()
     {
         lock (_lock)
@@ -44,6 +59,9 @@ internal sealed class MarkerRepository
         _recheckMembership.Clear();
     }
 
+    /// <summary>
+    /// Applies scan updates en masse and schedules each position for future revalidation.
+    /// </summary>
     public void ApplyUpdates(Dictionary<Vector3i, LootMarker> updates)
     {
         if (updates == null || updates.Count == 0)
@@ -61,6 +79,9 @@ internal sealed class MarkerRepository
         updates.Clear();
     }
 
+    /// <summary>
+    /// Incrementally rechecks a subset of active markers every scan tick.
+    /// </summary>
     public void Revalidate(World world, Vector3 playerPosition, float activeRadius, float now, LootScanner scanner)
     {
         if (world == null || scanner == null || _activeRechecksPerScan <= 0)
@@ -97,6 +118,9 @@ internal sealed class MarkerRepository
         }
     }
 
+    /// <summary>
+    /// Drops markers that have not been seen within the configured timeout.
+    /// </summary>
     public void Prune(float now)
     {
         List<Vector3i> toRemove = null;
@@ -126,18 +150,27 @@ internal sealed class MarkerRepository
             _recheckMembership.Remove(pos);
     }
 
+    /// <summary>
+    /// Inserts or replaces a marker while holding the lock.
+    /// </summary>
     private void SetMarker(Vector3i pos, LootMarker marker)
     {
         lock (_lock)
             _activeMarkers[pos] = marker;
     }
 
+    /// <summary>
+    /// Attempts to retrieve a marker by position.
+    /// </summary>
     private bool TryGetMarker(Vector3i pos, out LootMarker marker)
     {
         lock (_lock)
             return _activeMarkers.TryGetValue(pos, out marker);
     }
 
+    /// <summary>
+    /// Removes a marker entirely and ensures it is no longer queued for rechecks.
+    /// </summary>
     private void RemoveMarker(Vector3i pos)
     {
         lock (_lock)
@@ -146,12 +179,18 @@ internal sealed class MarkerRepository
         _recheckMembership.Remove(pos);
     }
 
+    /// <summary>
+    /// Tests whether a marker is still inside the current scan radius (with grace).
+    /// </summary>
     private bool IsWithinRadius(Vector3i pos, Vector3 playerPosition, float radiusLimitSqr)
     {
         var markerCenter = new Vector3(pos.x + 0.5f, pos.y + 0.5f, pos.z + 0.5f);
         return (markerCenter - playerPosition).sqrMagnitude <= radiusLimitSqr;
     }
 
+    /// <summary>
+    /// Adds a marker to the recheck queue if it is not already pending.
+    /// </summary>
     private void EnqueueForRecheck(Vector3i pos)
     {
         if (_recheckMembership.Add(pos))

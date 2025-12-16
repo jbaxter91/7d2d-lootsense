@@ -1,7 +1,13 @@
 using UnityEngine;
 
+/// <summary>
+/// Immutable representation of a loot target plus the geometry needed for rendering.
+/// </summary>
 internal readonly struct LootMarker
 {
+    /// <summary>
+    /// Builds a loot marker from scan results, capturing mesh data and timing.
+    /// </summary>
     public LootMarker(Vector3i position, Mesh mesh, Vector3 pivotOffset, Vector3 localCenter, Quaternion rotation, float lastSeenTime)
     {
         Position = position;

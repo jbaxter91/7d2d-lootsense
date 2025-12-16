@@ -1,10 +1,13 @@
 using System.Globalization;
 using UnityEngine;
 
+/// <summary>
+/// Coordinates scanning, marker lifecycle, overlay rendering, and profiler feedback for LootSense.
+/// </summary>
 internal sealed class LootSenseController
 {
     private const string PerkName = "perkPerceptionMastery";
-    private static readonly float[] RankMeters = { 0f, 1f, 2f, 3f, 4f, 5f };
+    private static readonly float[] RankMeters = { 0f, 2f, 4f, 6f, 8f, 10f };
 
     private const float ScanIntervalSeconds = 0.30f;
     private const float MovementScanThresholdMeters = 0.35f;
@@ -36,6 +39,9 @@ internal sealed class LootSenseController
     private bool _renderingEnabled = true;
     private bool _profilerEnabled;
 
+    /// <summary>
+    /// Builds the shared preferences, repositories, scanner, overlay, and profiler display instances.
+    /// </summary>
     public LootSenseController()
     {
         _preferences = new LootSensePreferences();
@@ -46,6 +52,9 @@ internal sealed class LootSenseController
         _profilerDisplay = new LootSenseProfilerDisplay(BuildProfilerReadout);
     }
 
+    /// <summary>
+    /// Main update hook invoked every frame for the local player to drive scans and overlay refreshes.
+    /// </summary>
     public void OnPlayerUpdate(EntityPlayerLocal player)
     {
         if (player == null || player.IsDead())
@@ -107,14 +116,15 @@ internal sealed class LootSenseController
         _markerRepository.Prune(now);
     }
 
+    /// <summary>
+    /// Reports that highlight mode is locked to icons for compatibility with existing commands.
+    /// </summary>
     public bool TrySetHighlightMode(string token, out HighlightMode mode, out string message)
-    {
-        bool success = _preferences.TrySetHighlightMode(token, out mode, out message);
-        if (success)
-            _overlay.NotifyPreferencesChanged();
-        return success;
-    }
+        => _preferences.TrySetHighlightMode(token, out mode, out message);
 
+    /// <summary>
+    /// Updates overlay opacity and refreshes materials if the value parses successfully.
+    /// </summary>
     public bool TrySetOpacity(string token, out string message)
     {
         bool success = _preferences.TrySetOpacity(token, out message);
@@ -123,6 +133,9 @@ internal sealed class LootSenseController
         return success;
     }
 
+    /// <summary>
+    /// Changes box/icon scaling preferences and notifies the overlay when the value is valid.
+    /// </summary>
     public bool TrySetSize(string token, out string message)
     {
         bool success = _preferences.TrySetSize(token, out message);
@@ -131,6 +144,9 @@ internal sealed class LootSenseController
         return success;
     }
 
+    /// <summary>
+    /// Applies a new highlight color parsed from hex text and propagates the change to materials.
+    /// </summary>
     public bool TrySetColor(string token, out string message)
     {
         bool success = _preferences.TrySetColor(token, out message);
@@ -139,6 +155,9 @@ internal sealed class LootSenseController
         return success;
     }
 
+    /// <summary>
+    /// Nudges the perk range bonus and reports the new effective maximum to the user.
+    /// </summary>
     public bool TryAdjustRange(string token, out string message)
     {
         bool success = _preferences.TryAdjustRange(token, out message);
@@ -147,6 +166,9 @@ internal sealed class LootSenseController
         return success;
     }
 
+    /// <summary>
+    /// Toggles the entire LootSense system on/off, clearing markers and overlay state when needed.
+    /// </summary>
     public bool TrySetSystemState(string token, out string message)
     {
         if (!TryParseToggle(token, out bool enabled, out message))
@@ -176,6 +198,9 @@ internal sealed class LootSenseController
         return true;
     }
 
+    /// <summary>
+    /// Enables or disables scanning without altering rendering so players can pause work temporarily.
+    /// </summary>
     public bool TrySetScanningState(string token, out string message)
     {
         if (!TryParseToggle(token, out bool enabled, out message))
@@ -196,6 +221,9 @@ internal sealed class LootSenseController
         return true;
     }
 
+    /// <summary>
+    /// Controls whether overlay drawing should occur while keeping scan data intact.
+    /// </summary>
     public bool TrySetRenderingState(string token, out string message)
     {
         if (!TryParseToggle(token, out bool enabled, out message))
@@ -219,6 +247,9 @@ internal sealed class LootSenseController
         return true;
     }
 
+    /// <summary>
+    /// Shows or hides the HUD profiler widget that surfaces timing metrics.
+    /// </summary>
     public bool TrySetProfilerState(string token, out string message)
     {
         if (!TryParseToggle(token, out bool enabled, out message))
@@ -236,6 +267,9 @@ internal sealed class LootSenseController
         return true;
     }
 
+    /// <summary>
+    /// Builds the short-form status string the console displays when users request pm_lootsense status.
+    /// </summary>
     public string GetHighlightModeSummary()
     {
         var summary = _preferences.BuildStatusSummary(_lastComputedRadius);
@@ -246,6 +280,9 @@ internal sealed class LootSenseController
             " profiler=", FormatToggle(_profilerEnabled));
     }
 
+    /// <summary>
+    /// Produces a verbose diagnostic snapshot of all user preferences and derived rank ranges.
+    /// </summary>
     public string GetConfigDump()
     {
         var baseDump = _preferences.BuildConfigDump(PreviewRadiusForRank, _lastComputedRadius).TrimEnd();
@@ -257,18 +294,27 @@ internal sealed class LootSenseController
             "\n");
     }
 
+    /// <summary>
+    /// Combines the perk base radius with user bonuses for a quick preview of a given rank.
+    /// </summary>
     private float PreviewRadiusForRank(int rank)
     {
         float baseRadius = GetBaseRadiusForRank(rank);
         return Mathf.Max(0f, baseRadius + _preferences.RangeBonusMeters);
     }
 
+    /// <summary>
+    /// Returns the baked-in vanilla radius per perk rank while clamping out-of-range input.
+    /// </summary>
     private static float GetBaseRadiusForRank(int rank)
     {
         int idx = Mathf.Clamp(rank, 0, RankMeters.Length - 1);
         return RankMeters[idx];
     }
 
+    /// <summary>
+    /// Movement gating ensures full scans only run when the player has moved enough to matter.
+    /// </summary>
     private bool ShouldPerformFullScan(Vector3 playerPosition)
     {
         lock (_scanGateLock)
@@ -282,6 +328,9 @@ internal sealed class LootSenseController
         }
     }
 
+    /// <summary>
+    /// Stores the most recent position that triggered a scan so future movement checks have state.
+    /// </summary>
     private void RecordScanPosition(Vector3 playerPosition)
     {
         lock (_scanGateLock)
@@ -291,6 +340,9 @@ internal sealed class LootSenseController
         }
     }
 
+    /// <summary>
+    /// Clears cached movement state so the next scan request is allowed immediately.
+    /// </summary>
     private void ResetMovementGate()
     {
         lock (_scanGateLock)
@@ -300,12 +352,18 @@ internal sealed class LootSenseController
         }
     }
 
+    /// <summary>
+    /// Overlay rendering mirrors the high-level system/render toggles so the HUD never lingers unexpectedly.
+    /// </summary>
     private void SyncOverlayState()
     {
         bool shouldRender = _systemEnabled && _renderingEnabled;
         _overlay.SetRenderingEnabled(shouldRender);
     }
 
+    /// <summary>
+    /// Aggregates the latest scan/render timings and builds the HUD-friendly profiler string.
+    /// </summary>
     private string BuildProfilerReadout()
     {
         double scanMs = _scanner.LastScanDurationMs;
@@ -322,6 +380,9 @@ internal sealed class LootSenseController
             fps);
     }
 
+    /// <summary>
+    /// Converts on/off style tokens into boolean values shared across every toggle command.
+    /// </summary>
     private static bool TryParseToggle(string token, out bool enabled, out string message)
     {
         enabled = true;
@@ -355,5 +416,8 @@ internal sealed class LootSenseController
         }
     }
 
+    /// <summary>
+    /// Normalizes boolean states into on/off text for status printouts.
+    /// </summary>
     private static string FormatToggle(bool value) => value ? "on" : "off";
 }
