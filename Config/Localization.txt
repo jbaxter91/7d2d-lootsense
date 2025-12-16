@@ -1,0 +1,7 @@
+Key,Source,Context,Changes,English
+perkPerceptionMasteryDesc,perkPerceptionMastery,,,Perk Perception Mastery retains all of its vanilla bonuses and now also unlocks LootSense, revealing unopened lootable containers roughly 2m, 4m, 6m, 8m, and 10m away at ranks 1 through 5.
+perkPerceptionMasteryRank1Desc,perkPerceptionMastery,,,Cushion Crawler lets you harvest dukes and cash from cushioned seating, beds, baskets, carts, car seats, suitcases, and clothing piles, and LootSense now pings unopened containers up to 2m away.
+perkPerceptionMasteryRank2Desc,perkPerceptionMastery,,,Salvage Specialist adds the ability to harvest steel from cars, gun safes, and shopping carts while LootSense extends to unopened containers up to 4m away.
+perkPerceptionMasteryRank3Desc,perkPerceptionMastery,,,Vital Wound makes spear and rifle primary attacks inflict bleeding damage, and LootSense now highlights unopened containers up to 6m away.
+perkPerceptionMasteryRank4Desc,perkPerceptionMastery,,,Blood Rush boosts sprinting spear power attacks by 25 percent damage while LootSense stretches to unopened containers up to 8m away.
+perkPerceptionMasteryRank5Desc,perkPerceptionMastery,,,Long Shot increases rifle shot damage by 50 percent and LootSense finally reaches unopened containers up to 10m away.
