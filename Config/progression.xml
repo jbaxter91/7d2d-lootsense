@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configs>
+
+  <!-- PERCEPTION_MASTERY: retarget vanilla rank tooltip keys to custom localization keys -->
+  <!-- Vanilla confirms perk name = perkPerceptionMastery and ranks use perkPerceptionMasteryRank#Desc/LongDesc -->
+  <!-- See vanilla: perkPerceptionMasteryRank1Desc..Rank5LongDesc -->
+
+  <!-- Rank 1 -->
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='1']/@desc_key">c1_perkPerceptionMasteryRank1Desc</set>
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='1']/@long_desc_key">c1_perkPerceptionMasteryRank1LongDesc</set>
+
+  <!-- Rank 2 -->
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='2']/@desc_key">c1_perkPerceptionMasteryRank2Desc</set>
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='2']/@long_desc_key">c1_perkPerceptionMasteryRank2LongDesc</set>
+
+  <!-- Rank 3 -->
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='3']/@desc_key">c1_perkPerceptionMasteryRank3Desc</set>
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='3']/@long_desc_key">c1_perkPerceptionMasteryRank3LongDesc</set>
+
+  <!-- Rank 4 -->
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='4']/@desc_key">c1_perkPerceptionMasteryRank4Desc</set>
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='4']/@long_desc_key">c1_perkPerceptionMasteryRank4LongDesc</set>
+
+  <!-- Rank 5 -->
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='5']/@desc_key">c1_perkPerceptionMasteryRank5Desc</set>
+  <set xpath="/progression/perks/perk[@name='perkPerceptionMastery']//effect_description[@level='5']/@long_desc_key">c1_perkPerceptionMasteryRank5LongDesc</set>
+
+</configs>
